@@ -159,3 +159,44 @@
     :with-dev-setup
     (= 0.28.1)))
   (ocaml-lsp-server :with-dev-setup)))
+
+(package
+ (name soteria-python)
+ (synopsis "Python symbolic execution tool based on Soteria")
+ (description "Python symbolic execution tool based on Soteria")
+ ;  (sites
+ ;   (share plugins))
+ (depends
+  ; [versionsync: OCAML_VERSION=5.4.1]
+  (ocaml
+   (>= 5.4.1))
+  ; (shexp :build)
+  soteria
+  ; dune-site
+  zarith
+  patricia-tree
+  cmdliner
+  iter
+  ppx_deriving
+  (ppx_subliner
+   (>= 0.2.1))
+  (ppx_mixins
+   (>= 0.2.0))
+  fmt
+  unionFind
+  ; charon
+  ppx_deriving_hash
+  (odoc :with-doc)
+  (alcotest :with-test)
+  (yojson
+   (< 3.0))
+  (dune
+   (and
+    :build
+    (>= 3.14.0)))
+  ; [versionsync: OCAMLFORMAT_VERSION=0.28.1]
+  (ocamlformat
+   (and
+    :with-dev-setup
+    (= 0.28.1)))
+  (ocaml-lsp-server :with-dev-setup)))

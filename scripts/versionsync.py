@@ -31,6 +31,7 @@ FILES_TO_SCAN = [
     ".github/workflows/build.yml",
     ".github/workflows/test-packages.yml",
     "soteria-rust.opam.template",
+    "soteria-python.opam.template",
     "dune-project",
     ".ocamlformat",
     "Makefile",

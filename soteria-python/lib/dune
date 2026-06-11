@@ -1,0 +1,4 @@
+(library
+ (name soteria_python_lib)
+ (public_name soteria-python.lib)
+ (libraries soteria pytecode))
