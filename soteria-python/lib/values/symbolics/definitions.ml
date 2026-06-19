@@ -4,14 +4,7 @@ open Hc
 module Var = Symex.Var
 module Int_map = Stdlib.Map.Make (Int)
 
-type ty =
-  | TNone_
-  | TBool
-  | TInt
-  | TFloat
-  | TStr
-  | TTuple of ty list
-
+type ty = TNone_ | TBool | TInt | TFloat | TStr | TTuple of ty list | TNull
 [@@deriving eq, show { with_path = false }, ord]
 
 let t_bool = TBool
@@ -121,13 +114,11 @@ type svalue =
   | Float of float
   | Str of string (* UTF-8 *)
   | Tuple of t list
-(* 
-  | Slice of svalue * svalue * svalue (* start, stop, step (None_ = absent) *)
-  | Range of Z.t * Z.t * Z.t (* start, stop, step *)
-  | Builtin of string (* builtin function, by name *)
-  | Bound of svalue * svalue (* callable, self — a bound method *)
-  | Code_obj of scode (* a code constant (consumed by Make_function) *)
-   *)
+  (* | Slice of svalue * svalue * svalue (* start, stop, step (None_ = absent)
+     *) | Range of Z.t * Z.t * Z.t (* start, stop, step *) | Builtin of string
+     (* builtin function, by name *) | Bound of svalue * svalue (* callable,
+     self — a bound method *) | Code_obj of scode (* a code constant (consumed
+     by Make_function) *) *)
   | Null (* CPython's NULL stack sentinel *)
   | Ref of sobj
   | Unop of Unop.t * t
@@ -244,12 +235,9 @@ let rec sure_neq a b =
   | Float a, Float b -> a <> b
   | Str a, Str b -> a <> b
   | Tuple a, Tuple b -> (
-    try
-      List.for_all2 sure_neq a b
-    with Invalid_argument _ -> false
-  )
+      try List.for_all2 sure_neq a b with Invalid_argument _ -> false)
   | Ref _, Ref _ -> failwith "ToDo"
-  | Float f, Int i | Int i, Float f -> failwith "Determine what to do" 
+  | Float f, Int i | Int i, Float f -> failwith "Determine what to do"
   | _ -> false (* [None_] and [Null] cases are included here *)
 
 module Hcons = Hc.Make (struct
@@ -277,3 +265,5 @@ let mk_var v ty = Var v <| ty
     element with the smallest id is on the LHS, to increase cache hits. *)
 let mk_commut_binop op l r =
   if l.tag <= r.tag then Binop (op, l, r) else Binop (op, r, l)
+
+let null = Null <| TNull

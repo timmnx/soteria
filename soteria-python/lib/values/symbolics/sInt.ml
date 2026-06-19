@@ -96,14 +96,11 @@ let rec is_mod v n =
   | Binop (Mul, v2, v3) -> is_mod v2 n || is_mod v3 n
   | _ -> false
 
-(* let rec rem v1 v2 =
-  match (v1.node.kind, v2.node.kind) with
-  | _, _ when equal v2 one -> zero
-  | _, Int i2 when is_mod v1 i2 -> zero
-  | Int i1, Int i2 -> int_z (Z.rem i1 i2)
-  | Binop (Mul, v1, n), Binop (Mul, v2, m) when equal n m -> mul n (rem v1 v2)
-  | Binop (Mul, n, v1), Binop (Mul, m, v2) when equal n m -> mul n (rem v1 v2)
-  | _ -> Binop (Floor_div, v1, v2) <| v1.node.ty *)
+(* let rec rem v1 v2 = match (v1.node.kind, v2.node.kind) with | _, _ when equal
+   v2 one -> zero | _, Int i2 when is_mod v1 i2 -> zero | Int i1, Int i2 ->
+   int_z (Z.rem i1 i2) | Binop (Mul, v1, n), Binop (Mul, v2, m) when equal n m
+   -> mul n (rem v1 v2) | Binop (Mul, n, v1), Binop (Mul, m, v2) when equal n m
+   -> mul n (rem v1 v2) | _ -> Binop (Floor_div, v1, v2) <| v1.node.ty *)
 
 let rec mod_ v1 v2 =
   match (v1.node.kind, v2.node.kind) with
@@ -131,14 +128,15 @@ let rec mod_ v1 v2 =
   | _ -> Binop (Mod, v1, v2) <| TInt
 
 let rec pow v1 v2 =
-  match v1.node.kind, v2.node.kind with
+  match (v1.node.kind, v2.node.kind) with
   | Int i1, Int i2 -> Z.pow i1 (Z.to_int i2) |> int_z
   | _ -> Binop (Pow, v1, v2) <| TInt
 
 let neg v = match v.node.kind with Int i -> int_z (Z.neg i) | _ -> sub zero v
 
-let invert v = match v.node.kind with
-  | Int i -> int_z (Z.neg (Z.(+) i Z.one))
+let invert v =
+  match v.node.kind with
+  | Int i -> int_z (Z.neg (Z.( + ) i Z.one))
   | _ -> sub (-1 |> int) v
 
 (* {2 Equality, comparison, int-bool and int-float conversions} *)
@@ -276,24 +274,21 @@ let rec sem_eq v1 v2 =
         else SBool.v_false
     | _ -> mk_commut_binop Eq v1 v2 <| TBool
 
-let sem_eq_untyped v1 v2 =
-  if equal_ty v1.node.ty v2.node.ty then sem_eq v1 v2 else SBool.v_false
-
 let sem_ne v1 v2 =
   if equal v1 v2 then SBool.v_false
   else
     match (v1.node.kind, v2.node.kind) with
     | Int z1, Int z2 -> SBool.of_bool (Z.equal z1 z2 |> not)
-    | _ -> sem_eq v1 v2 |> SBool.not
+    | _ -> sem_eq v1 v2 |> SBool.not_
 
 (* {Conversion} *)
 
-let to_bool v =
+let cast_to_bool v =
   match v.node.kind with
   | Int i -> if Z.equal Z.zero i then SBool.v_false else SBool.v_true
   | _ -> Binop (Ne, v, zero) <| TBool
 
-let to_float v =
+let cast_to_float v =
   match v.node.kind with
   | Int i -> Float (Z.to_float i) <| TFloat
   | _ -> failwith "ToDo"
