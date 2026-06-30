@@ -73,8 +73,7 @@ let rec encode_value (v : Svalue.t) =
   | Nop (Distinct, vs) ->
       let vs = List.map encode_value_memo vs in
       distinct vs
-  | None_ | Null | Float _ | Str _ | Tuple _ | Ref _ ->
-      failwith "Does not exist yet (ToDo)"
+  | Float _ -> failwith "Does not exist yet (ToDo)"
 
 and encode_value_memo v =
   match Hashtbl.Hint.find_opt memo_encode_value_tbl v.Hc.tag with
@@ -85,4 +84,4 @@ and encode_value_memo v =
       k
 
 let encode_value (v : Svalue.t) =
-  Svalue.split_ands v |> Iter.map encode_value_memo |> Iter.to_list |> bool_ands
+  Svalue.SBool.split_ands v |> Iter.map encode_value_memo |> Iter.to_list |> bool_ands

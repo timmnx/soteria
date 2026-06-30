@@ -1,5 +1,5 @@
 # Versions managed by scripts/versionsync.py - edit scripts/versions.json to change
 pin-depends: [
-  # [versionsync: PYTECODE_COMMIT_HASH=4f5c94ea0dbb7ddfc8cde1efd3fc14512441bb92]
-  ["pytecode.~dev" "git+https://github.com/soteria-tools/pytecode#4f5c94ea0dbb7ddfc8cde1efd3fc14512441bb92"]
+  # [versionsync: PYTECODE_COMMIT_HASH=60af24539c7814edf1dc8c9fd91014361a49ecc3]
+  ["pytecode.~dev" "git+https://github.com/soteria-tools/pytecode#60af24539c7814edf1dc8c9fd91014361a49ecc3"]
 ]

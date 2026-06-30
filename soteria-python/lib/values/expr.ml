@@ -1,7 +1,6 @@
 open Soteria
 open Soteria_std
-open Symbolics
-open Definitions
+open Svalue
 
 (* module Garbage : sig type t val pp : Ppx_deriving_runtime.Format.formatter ->
    t -> Ppx_deriving_runtime.unit val show : t -> Ppx_deriving_runtime.string
@@ -14,11 +13,11 @@ open Definitions
 
    module Subst : sig type t end end *)
 
-type t = Definitions.t
+type t = Svalue.t
 
 let pp = failwith "Ignore (ToDo)"
 let show = failwith "Ignore (ToDo)"
-let ty (s : t) : Definitions.ty = s.node.ty
+let ty (s : t) : Svalue.ty = s.node.ty
 let of_value v = v
 let subst f v = f v
 

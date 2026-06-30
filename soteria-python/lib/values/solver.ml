@@ -216,16 +216,16 @@ struct
         match
           Solver_state.trivial_truthiness_of solver.state (Typed.type_ v)
         with
-        | Some true -> Svalue.v_true
-        | Some false -> Svalue.v_false
+        | Some true -> Svalue.SBool.v_true
+        | Some false -> Svalue.SBool.v_false
         | None -> (
             match v.node.kind with
             | Unop (Not, e) ->
                 let e' = simplify' solver e in
                 if Svalue.equal e e' then v else Svalue.not e'
             | Binop (Eq, e1, e2) ->
-                if Svalue.equal e1 e2 then Svalue.v_true
-                else if Svalue.sure_neq e1 e2 then Svalue.v_false
+                if Svalue.equal e1 e2 then Svalue.SBool.v_true
+                else if Svalue.sure_neq e1 e2 then Svalue.SBool.v_false
                 else v
             | Binop (And, e1, e2) ->
                 let se1 = simplify' solver e1 in
@@ -246,7 +246,7 @@ struct
                   && Svalue.equal se1 e1
                   && Svalue.equal se2 e2
                 then v
-                else Svalue.ite sg se1 se2
+                else Svalue.SBool.ite sg se1 se2
             | _ -> Analysis.simplify solver.analysis v))
 
   and simplify solver : 'a Typed.t -> 'a Typed.t = as_untyped (simplify' solver)
@@ -269,7 +269,7 @@ struct
        in which case we replace it with the value [v]. If the constraint
        evaluates to true, then it is satisfiable. *)
     let v_eqs = Var.Hashtbl.create 8 in
-    Svalue.split_ands to_check (fun v ->
+    Svalue.SBool.split_ands to_check (fun v ->
         match v.node.kind with
         | Binop
             ( Eq,
@@ -286,11 +286,11 @@ struct
       | Svalue.TInt -> (
           let i = Var.to_int v in
           try Some (Var.Hashtbl.find v_eqs v)
-          with Not_found -> Some (Symbolics.SInt.int i))
+          with Not_found -> Some (Svalue.SInt.int i))
       | _ -> None
     in
     let res = Eval.eval ~eval_var to_check in
-    match res with Some v -> Svalue.equal v Svalue.v_true | _ -> false
+    match res with Some v -> Svalue.equal v Svalue.SBool.v_true | _ -> false
 
   let check_sat_raw solver relevant_vars to_check =
     (* TODO: we shouldn't wait for ack for each command individually... *)

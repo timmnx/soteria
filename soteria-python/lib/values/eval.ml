@@ -30,13 +30,13 @@ let eval_binop : Binop.t -> t -> t -> t = function
   | Eq -> sem_eq
   | Ne -> sem_ne
   | Lt -> lt
-  | Le -> le
+  | Le -> leq
   | Gt -> gt
-  | Ge -> ge
+  | Ge -> geq
 
 let eval_unop : Unop.t -> t -> t = function
   | Negative -> neg
-  | Not -> not_
+  | Not -> not
   | Invert -> invert
   | To_bool -> cast_to_bool
 
@@ -56,12 +56,12 @@ let rec eval (x : t) : t =
       if v1 == nv1 && v2 == nv2 then x else eval_binop binop nv1 nv2
   | Nop (nop, l) -> (
       let l, changed = List.map_changed eval l in
-      if Stdlib.not changed then x else match nop with Distinct -> distinct l)
+      if Stdlib.not changed then x else match nop with Distinct -> SBool.distinct l)
   | Ite (guard, then_, else_) ->
       let guard = eval guard in
-      if equal guard v_true then eval then_
-      else if equal guard v_false then eval else_
-      else ite guard (eval then_) (eval else_)
+      if equal guard SBool.v_true then eval then_
+      else if equal guard SBool.v_false then eval else_
+      else SBool.ite guard (eval then_) (eval else_)
   | _ -> failwith "ToDo"
 
 let eval ~(eval_var : Var.t -> Svalue.ty -> t option) (x : t) : t option =
