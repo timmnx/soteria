@@ -2,7 +2,7 @@ open Soteria
 open Soteria_std
 open Hc
 module Var = Symex.Var
-module Int_map = Stdlib.Map.Make (Int)
+(* module Int_map = Stdlib.Map.Make (Int) *)
 
 type ty =
   (* | TNone_ *)
@@ -410,21 +410,14 @@ module SInt = struct
     | Int i1, Int i2 -> int_z (Z.mul i1 i2)
     | _ -> mk_commut_binop Mul v1 v2 <| TInt
 
-  (* let div v1 v2 =
-    match (v1.node.kind, v2.node.kind) with
-    | _, _ when equal v2 one -> v1
-    | Int i1, Int i2 when Z.divisible i1 i2 -> int_z (Z.div i1 i2)
-    | Int i1, Int i2 ->
-        failwith "ToDo: SFloat.float (Z.to_float i1 /. Z.to_float i2)"
-    | Binop (Mul, v, { node = { kind = Int i; _ }; _ }), Int j
-    | Int j, Binop (Mul, v, { node = { kind = Int i; _ }; _ })
-      when Z.equal i j ->
-        v
-    | Binop (Mul, { node = { kind = Int i; _ }; _ }, v), Int j
-    | Int j, Binop (Mul, { node = { kind = Int i; _ }; _ }, v)
-      when Z.equal i j ->
-        v
-    | _ -> Binop (Div, v1, v2) <| TInt *)
+  (* let div v1 v2 = match (v1.node.kind, v2.node.kind) with | _, _ when equal
+     v2 one -> v1 | Int i1, Int i2 when Z.divisible i1 i2 -> int_z (Z.div i1 i2)
+     | Int i1, Int i2 -> failwith "ToDo: SFloat.float (Z.to_float i1 /.
+     Z.to_float i2)" | Binop (Mul, v, { node = { kind = Int i; _ }; _ }), Int j
+     | Int j, Binop (Mul, v, { node = { kind = Int i; _ }; _ }) when Z.equal i j
+     -> v | Binop (Mul, { node = { kind = Int i; _ }; _ }, v), Int j | Int j,
+     Binop (Mul, { node = { kind = Int i; _ }; _ }, v) when Z.equal i j -> v | _
+     -> Binop (Div, v1, v2) <| TInt *)
 
   let floor_div v1 v2 =
     match (v1.node.kind, v2.node.kind) with
@@ -707,8 +700,7 @@ let mul (v1 : t) (v2 : t) : t =
   | _ -> failwith "Mul only implemented fot TInt (ToDo)"
 
 let div (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with
-  | _ -> failwith "ToDo"
+  match (v1.node.ty, v2.node.ty) with _ -> failwith "ToDo"
 
 let floor_div (v1 : t) (v2 : t) : t =
   match (v1.node.ty, v2.node.ty) with

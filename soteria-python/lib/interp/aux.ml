@@ -1,5 +1,6 @@
-open Pytecode
-open Phir
+open Pytecode.Phir
+open Soteria
+open Soteria_std
 
 (* module Typed = Soteria.Tiny_values.Typed *)
 module Typed = Values.Typed
@@ -14,18 +15,21 @@ end
 module S_int = struct
   include Typed
 
+  (* include SBool *)
+  include SInt
+
   type t = Typed.T.sint Typed.t
   type syn = Symex.Value.Expr.t
 
   let simplify = Symex.simplify
   let distinct vs = Typed.distinct_seq vs
-  let fresh () = failwith "Symex.nondet Typed.t_int"
+  let fresh () = Symex.nondet Typed.t_int
   let pp = Typed.ppa
   let show x = (Fmt.to_to_string pp) x
   let pp_syn = Symex.Value.Expr.pp
   let show_syn x = (Fmt.to_to_string pp_syn) x
-  let learn_eq (s : syn) (t : t) = failwith "Symex.Consumer.learn_eq s t"
-  let to_syn (x : t) = failwith "Symex.Value.Expr.of_value x"
+  let learn_eq (s : syn) (t : t) = Symex.Consumer.learn_eq s t
+  let to_syn (x : t) = Symex.Value.Expr.of_value x
   let exprs_syn (x : syn) = [ x ]
   let subst = Symex.Value.Expr.subst
 end
@@ -38,32 +42,26 @@ module S_val = struct
 
   let pp_syn = Symex.Value.Expr.pp
   let show_syn = Fmt.to_to_string pp_syn
-  let to_syn : t -> syn = failwith "Expr.of_value"
+  let to_syn : t -> syn = Expr.of_value
   let subst = Symex.Value.Expr.subst
-  let learn_eq (s : syn) (t : t) = failwith "Symex.Consumer.learn_eq s t"
+  let learn_eq (s : syn) (t : t) = Symex.Consumer.learn_eq s t
   let exprs_syn (x : syn) = [ x ]
   let sem_eq = sem_eq_untyped
 
   let fresh () : t Symex.t =
-    failwith
-      {|
     Symex.branches
       [
         (fun () -> Symex.nondet Typed.t_int);
         (fun () -> Symex.nondet Typed.t_bool);
       ]
-    |}
 
   let check_nonzero (v : T.sint Typed.t) :
       (T.nonzero Typed.t, string, 'a) Symex.Result.t =
     let open Symex.Syntax in
     let open Typed.Infix in
     let open Typed.Syntax in
-    failwith
-      {|
     if%sat v ==@ 0s then Symex.Result.error "ZeroException"
     else Symex.Result.ok (Typed.cast v)
-    |}
 end
 
 module String_map = Soteria.Soteria_std.Map.Make (Soteria.Soteria_std.String)

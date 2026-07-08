@@ -17,8 +17,7 @@ module T : sig
   (** A symbolic float. *)
   type sfloat = [ `Float ]
 
-  type snumber = [ `Nonzero | `Zero | `Float]
-
+  type snumber = [ `Nonzero | `Zero | `Float ]
   type any = [ `Bool | `Nonzero | `Zero | `Float ]
 
   val pp_sint : Format.formatter -> sint -> unit
@@ -153,23 +152,6 @@ module SInt : sig
   val to_float : [< sint ] t -> [> sfloat ] t
 end
 
-(* module Infix : sig
-  val ( ==@ ) : ([< any ] as 'a) t -> 'a t -> [> sbool ] t
-  val ( ==?@ ) : 'a t -> 'b t -> [> sbool ] t
-  val ( >@ ) : [< sint ] t -> [< sint ] t -> [> sbool ] t
-  val ( >=@ ) : [< sint ] t -> [< sint ] t -> [> sbool ] t
-  val ( <@ ) : [< sint ] t -> [< sint ] t -> [> sbool ] t
-  val ( <=@ ) : [< sint ] t -> [< sint ] t -> [> sbool ] t
-  val ( &&@ ) : [< sbool ] t -> [< sbool ] t -> [> sbool ] t
-  val ( ||@ ) : [< sbool ] t -> [< sbool ] t -> [> sbool ] t
-  val ( +@ ) : [< sint ] t -> [< sint ] t -> [> sint ] t
-  val ( -@ ) : [< sint ] t -> [< sint ] t -> [> sint ] t
-  val ( ~- ) : [< sint ] t -> [> sint ] t
-  val ( *@ ) : [< sint ] t -> [< sint ] t -> [> sint ] t
-  val ( /@ ) : [< sint ] t -> [< nonzero ] t -> [> sint ] t
-  val ( %@ ) : [< sint ] t -> [< nonzero ] t -> [> sint ] t
-end *)
-
 (** Floating point operations *)
 
 module SFloat : sig
@@ -181,6 +163,7 @@ val neg : [< any ] t -> [> any ] t
 
 val not : [< any ] t -> [> sbool ] t
 val invert : [< any ] t -> [> any ] t
+
 (* val to_bool : [< any ] t -> [> sbool ] t *)
 val cast_to_bool : [< any ] t -> [> sbool ] t
 val add : [< any ] t -> [< any ] t -> [> snumber ] t
@@ -229,6 +212,7 @@ module Infix : sig
   val ( >=@ ) : [< any ] t -> [< any ] t -> [> sbool ] t
   val ( <@ ) : [< any ] t -> [< any ] t -> [> sbool ] t
   val ( <=@ ) : [< any ] t -> [< any ] t -> [> sbool ] t
+  (* val ( ==?@ ) : 'a t -> 'b t -> [> sbool ] t *)
 end
 
 module Syntax : sig
