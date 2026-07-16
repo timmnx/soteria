@@ -3,13 +3,19 @@ open Soteria
 open Soteria_std
 
 (* module Typed = Soteria.Tiny_values.Typed *)
-module Typed = Values.Typed
-module Symex = Soteria.Symex.Make (Values.Solver.Z3_solver)
+open Soteria_python_python_values
+module Symex = Soteria.Symex.Make (Solver.Z3_solver)
 module Logic = Soteria.Logic.Make (Symex)
 
 module Error = struct
-  type t = [ `Interp of string | `UseAfterFree | Symex.cons_fail ]
+  type t =
+    [ `Interp of string
+    | `UseAfterFree
+    | Symex.cons_fail
+    | `NotImplementedYet of string ]
   [@@deriving show { with_path = false }]
+
+  type with_trace = t Soteria.Terminal.Call_trace.t
 end
 
 module S_int = struct
@@ -47,6 +53,8 @@ module S_val = struct
   let learn_eq (s : syn) (t : t) = Symex.Consumer.learn_eq s t
   let exprs_syn (x : syn) = [ x ]
   let sem_eq = sem_eq_untyped
+
+  let are_addable (x:t) (y:t) : (t*t) option= Typed.are_addable x y
 
   let fresh () : t Symex.t =
     Symex.branches

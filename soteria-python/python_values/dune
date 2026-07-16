@@ -1,7 +1,7 @@
 (library
- (name soteria_python_lib)
- (public_name soteria-python.lib)
- (libraries soteria hc pytecode soteria_python_python_values)
+ (name soteria_python_python_values)
+ (public_name soteria-python.python_values)
+ (libraries soteria hc pytecode)
  (preprocess
   (pps
    ppx_blob

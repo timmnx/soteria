@@ -18,7 +18,12 @@ module T : sig
   type sfloat = [ `Float ]
 
   type snumber = [ `Nonzero | `Zero | `Float ]
-  type any = [ `Bool | `Nonzero | `Zero | `Float ]
+  type sstr = [ `Str ]
+  type others = [ `Others ]
+  type not_yet_implemented = [ `NotYetImplemented ]
+
+  type any =
+    [ `Bool | `Nonzero | `Zero | `Float | `Str | `Others | `NotYetImplemented ]
 
   val pp_sint : Format.formatter -> sint -> unit
   val pp_nonzero : Format.formatter -> nonzero -> unit
@@ -158,6 +163,25 @@ module SFloat : sig
   val float : float -> [> sfloat ] t
 end
 
+module SStr : sig
+  val str : string -> [> sstr ] t
+  val get_str : [< any ] t -> string option
+end
+
+module SOthers : sig
+  val none_ : [> others ] t
+  val null : [> others ] t
+  val mk_ref : int -> [> others ] t
+  val mk_builtin : string -> [> others ] t
+  val not_implemented : [> others ] t
+  val ellipsis : [> others ] t
+  val null : [> others ] t
+  val is_none_ : [< any ] t -> bool
+  val is_null : [< any ] t -> bool
+  val get_ref : [< any ] t -> int option
+  val get_builtin : [< any ] t -> string option
+end
+
 (** All operations *)
 val neg : [< any ] t -> [> any ] t
 
@@ -193,6 +217,8 @@ module Infix : sig
   val ( +@ ) : [< any ] t -> [< any ] t -> [> snumber ] t
   val ( -@ ) : [< any ] t -> [< any ] t -> [> snumber ] t
   val ( ~- ) : [< any ] t -> [> snumber ] t
+  val ( ~! ) : [< any ] t -> [> sbool ] t
+  val ( ~~ ) : [< any ] t -> [> snumber ] t
   val ( *@ ) : [< any ] t -> [< any ] t -> [> snumber ] t
   val ( /@ ) : [< any ] t -> [< any ] t -> [> sfloat ] t
   val ( //@ ) : [< any ] t -> [< any ] t -> [> snumber ] t
@@ -222,6 +248,8 @@ module Syntax : sig
     val one : unit -> [> sint ] t
   end
 end
+
+val are_addable : 'a t -> 'b t -> ('a t * 'b t) option
 
 module Expr :
   Soteria.Symex.Value.Expr

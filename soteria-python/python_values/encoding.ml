@@ -73,7 +73,7 @@ let rec encode_value (v : Svalue.t) =
   | Nop (Distinct, vs) ->
       let vs = List.map encode_value_memo vs in
       distinct vs
-  | Float _ -> failwith "Does not exist yet (ToDo)"
+  | _ -> failwith "Does not exist yet (ToDo)"
 
 and encode_value_memo v =
   match Hashtbl.Hint.find_opt memo_encode_value_tbl v.Hc.tag with

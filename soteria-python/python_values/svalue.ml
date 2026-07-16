@@ -4,17 +4,16 @@ open Hc
 module Var = Symex.Var
 (* module Int_map = Stdlib.Map.Make (Int) *)
 
-type ty =
-  (* | TNone_ *)
-  | TBool
-  | TInt
-  | TFloat
+type ty = TBool | TInt | TFloat | TStr | TOthers | TNotYetImplemented
 (* | TStr | TTuple of ty list | TNull *)
 [@@deriving eq, show { with_path = false }, ord]
 
 let t_bool = TBool
 let t_int = TInt
 let t_float = TFloat
+let t_str = TStr
+let t_others = TOthers
+let t_not_yet_implemented = TNotYetImplemented
 let is_int = function TInt -> true | _ -> false
 let is_float = function TFloat -> true | _ -> false
 
@@ -99,16 +98,26 @@ let compare_hash_consed _ t1 t2 = Int.compare t1.tag t2.tag
 
 type t_kind =
   | Var of Var.t
-  (* | None_ *)
+  | None_
   | Bool of bool
   | Int of Z.t [@printer Fmt.of_to_string Z.to_string]
   | Float of float
-  (* | Str of string (* UTF-8 *) | Tuple of t list | Slice of t_kind * t_kind *
-     t_kind (* start, stop, step (None_ = absent) *) | Range of Z.t * Z.t * Z.t
-     (* start, stop, step *) | Builtin of string (* builtin function, by name *)
-     | Bound of t_kind * t_kind (* callable, self — a bound method *) | Code_obj
-     of scode (* a code constant (consumed by Make_function) *) | Null (*
-     CPython's NULL stack sentinel *) | Ref of sobj *)
+  (* ref: Language Reference 3.2.4.3 Complex (numbers.Complex) *)
+  | Complex of float * float (* real, imaginary *)
+  | Str of string (* UTF-8 *)
+  | Bytes of string (* an immutable byte string (raw bytes) *)
+  | Tuple of t list
+  | Slice of t * t * t (* start, stop, step (None_ = absent) *)
+  | Range of Z.t * Z.t * Z.t (* start, stop, step *)
+  | Builtin of string (* builtin function, by name *)
+  | Bound of t * t (* callable, self — a bound method *)
+  (* | Code_obj of Phir.code (* a code constant (consumed by Make_function) *) *)
+  | Ref of int (* heap address *)
+  | Null (* CPython's NULL stack sentinel *)
+  (* ref: Language Reference 3.2.2 NotImplemented *)
+  | Not_implemented (* the NotImplemented singleton *)
+  (* ref: Language Reference 3.2.3 Ellipsis (the [...] literal) *)
+  | Ellipsis
   | Unop of Unop.t * t
   | Binop of Binop.t * t * t
   | Nop of Nop.t * t list
@@ -135,6 +144,7 @@ let rec iter_vars (sv : t) (f : Var.t * ty -> unit) : unit =
       iter_vars c f;
       iter_vars t f;
       iter_vars e f
+  | _ -> failwith "Don't know what to do"
 
 let pp_full ft t = pp_t_node ft t.node
 
@@ -659,6 +669,31 @@ module SFloat = struct
   (* ToDo *)
 end
 
+module SStr = struct
+  (** {2 Integers + Float + Str} *)
+  let str s = Str s <| TStr
+    let get_str (v : t) : string option =
+      match v.node.kind with Str s -> Some s | _ -> None
+  (* ToDo *)
+end
+
+module SOthers = struct
+  let none_ = None_ <| TOthers
+  let null = Null <| TOthers
+  let mk_ref i = Ref i <| TOthers
+  let mk_builtin s = Builtin s <| TOthers
+  let not_implemented = Not_implemented <| TOthers
+  let ellipsis = Ellipsis <| TOthers
+
+  let is_none_ (v : t) : bool = equal none_ v
+  let is_null (v : t) : bool = equal null v
+
+  let get_ref (v : t) : int option =
+    match v.node.kind with Ref i -> Some i | _ -> None
+  let get_builtin (v : t) : string option =
+    match v.node.kind with Builtin s -> Some s | _ -> None
+end
+
 (** {2 Unop functions} *)
 let neg (v : t) : t =
   match v.node.ty with
@@ -830,6 +865,12 @@ let not v = mk_unop Unop.Not v
 
 (** {2 Infix operators} *)
 
+let are_addable (x:t) (y:t) =
+  match (x.node.ty, y.node.ty) with
+  | TInt, TInt -> Some (x, y)
+  | TInt, TFloat -> None
+  | _ -> failwith "ToDo"
+
 module Infix = struct
   let int_z = SInt.int_z
   let int = SInt.int
@@ -838,6 +879,8 @@ module Infix = struct
   let ( +@ ) = mk_binop Add
   let ( -@ ) = mk_binop Sub
   let ( ~- ) = mk_unop Negative
+  let ( ~! ) = mk_unop Not
+  let ( ~~ ) = mk_unop Invert
   let ( *@ ) = mk_binop Mul
   let ( /@ ) = mk_binop Div
   let ( //@ ) = mk_binop Floor_div

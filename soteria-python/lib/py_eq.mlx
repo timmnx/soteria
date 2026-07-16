@@ -1,0 +1,160 @@
+open Aux
+open Value
+open Symex.Syntax
+
+(* ref: 3.2 / 3.3.1 — a built-in-type subclass instance that does not override
+   the relevant comparison dunder(s) compares using its underlying payload (so
+   `class M(int)` without __eq__ compares as an int). *)
+let cmp_unwrap st v dunders : (value * state, 'err, 'a) Symex.Result.t =
+  match deref st v with
+  | Some (Instance { cls; native; _ }) when not @@ S_val.SOthers.is_none_ native ->
+      let rec ov st = function
+        | [] -> Symex.Result.ok (false, st)
+        | d :: rest ->
+            let** m, st = type_lookup st cls d in
+            if m <> None then Symex.Result.ok (true, st) else ov st rest
+      in
+      let* overridden, st = ov st dunders in
+      Ok ((if overridden then v else native), st)
+  | _ -> Ok (v, st)
+
+and eq_dunders = [ "__eq__"; "__ne__" ]
+and order_dunders = [ "__lt__"; "__gt__"; "__le__"; "__ge__" ]
+
+(* ref: 6.10.1 Value comparisons — the == operator. Numbers compare across the
+   numeric tower (3.2.4), str/bytes by content, tuple/list/set/dict structurally
+   (element-wise, by value), instances via __eq__ (3.3.1, see [instance_eq]);
+   any other immediate (None/Ellipsis/NotImplemented/builtins) by identity. *)
+and py_eq st a b : bool r =
+  let* a, st = cmp_unwrap st a eq_dunders in
+  let* b, st = cmp_unwrap st b eq_dunders in
+  match (a, b) with
+  | _ when is_number a && is_number b -> Ok (num_eq a b, st)
+  | _ when (is_complex a && is_numeric b) || (is_numeric a && is_complex b) ->
+      let ar, ai = Option.get (as_complex a)
+      and br, bi = Option.get (as_complex b) in
+      Ok (ar = br && ai = bi, st)
+  | Str x, Str y -> Ok (x = y, st)
+  | _, _ when as_bytes st a <> None && as_bytes st b <> None ->
+      (* ref: 3.2.5 — bytes and bytearray compare across their types *)
+      Ok (as_bytes st a = as_bytes st b, st)
+  | None_, None_ -> Ok (true, st)
+  | Tuple xs, Tuple ys -> seq_eq st xs ys
+  | Ref x, Ref y when x = y -> Ok (true, st)
+  | Ref x, Ref y -> (
+      match (heap_get st x, heap_get st y) with
+      | List xs, List ys -> seq_eq st xs ys
+      | Dict xs, Dict ys -> dict_eq st xs ys
+      | (Set xs | Frozenset xs), (Set ys | Frozenset ys) -> set_eq st xs ys
+      | Instance _, _ | _, Instance _ -> instance_eq st a b
+      | _ -> Ok (false, st))
+  | (Ref _, _ | _, Ref _) when is_instance_value st a || is_instance_value st b
+    ->
+      instance_eq st a b
+  (* singletons and other immediates compare by identity: None/Ellipsis/
+     NotImplemented/builtins are equal only to themselves *)
+  | _ -> Ok (a = b, st)
+
+(* ref: 6.10.1 — sequences compare equal iff same length and pairwise == *)
+and seq_eq st xs ys =
+  if List.length xs <> List.length ys then Ok (false, st)
+  else
+    fold_m st
+      (fun st acc (x, y) -> if not acc then Ok (false, st) else py_eq st x y)
+      true (List.combine xs ys)
+
+(* ref: 6.10.1 / 3.2.7.1 — two dicts are equal iff same length and every key of
+   one maps (by ==) to an == value in the other; order is irrelevant *)
+and dict_eq st xs ys =
+  if List.length xs <> List.length ys then Ok (false, st)
+  else
+    fold_m st
+      (fun st acc (k, v) ->
+        if not acc then Ok (false, st)
+        else
+          let* found, st = dict_find st ys k in
+          match found with None -> Ok (false, st) | Some v' -> py_eq st v v')
+      true xs
+
+(* ref: 6.10.1 / 3.2.6 — sets compare equal iff equal size and one is a subset
+   of the other (i.e. same membership) *)
+and set_eq st xs ys =
+  if List.length xs <> List.length ys then Ok (false, st)
+  else set_subset st xs ys
+
+(* ref: 3.2.6 — set.issubset (<=): every element of xs is a member of ys *)
+and set_subset st xs ys =
+  fold_m st
+    (fun st acc x ->
+      if not acc then Ok (false, st)
+      else
+        let* m, st = set_mem st ys x in
+        Ok (m, st))
+    true xs
+
+and set_mem st elems x =
+  (* ref: 6.10.2 Membership test operations — x in y is
+     any(x is e or x == e for e in y); the identity check short-circuits so an
+     element is found even if its __eq__ disagrees. *)
+  fold_m st
+    (fun st acc e ->
+      if acc || val_identical e x then Ok (true, st) else py_eq st e x)
+    false elems
+
+(* ref: 3.3.1 (rich comparison methods __lt__../__eq__..) and 3.2.2 NotImplemented.
+   Call a rich-comparison dunder, treating both "not defined" and a
+   NotImplemented return as "no answer here" (so the protocol falls through to
+   the reflected method, then to the default). *)
+and try_richcmp st v name args : value option r =
+  let* m, st = find_dunder st v name in
+  match m with
+  | Some f -> (
+      let* r, st = call st f args [] in
+      match r with Not_implemented -> Ok (None, st) | _ -> Ok (Some r, st))
+  | None -> Ok (None, st)
+
+(* ref: 3.3.1 / 6.10.1 / 3.3.8 — reflected-operand priority. If both operands are
+   instances, type(b) is a *proper* subclass of type(a), and type(b) overrides
+   the reflected method, the reflected method is tried before the left's method. *)
+and reflected_priority st a b reflected : bool r =
+  match (deref st a, deref st b) with
+  | Some (Instance { cls = ca; _ }), Some (Instance { cls = cb; _ })
+    when ca <> cb && List.mem ca (cls_of st cb).mro ->
+      let* mb, st = type_lookup st cb reflected in
+      let* ma, st = type_lookup st ca reflected in
+      Ok (mb <> None && mb <> ma, st)
+  | _ -> Ok (false, st)
+
+and instance_eq st a b : bool r =
+  let* v, st = instance_eq_value st a b in
+  py_truth st v
+
+(* ref: 3.3.1 — default __eq__ is identity, == falls back to `is` when no method
+   gives a result. __eq__ is its own reflection, so subclass priority just swaps
+   which operand is tried first. Returns the *raw* result (may be non-bool;
+   6.10.1). *)
+and instance_eq_value st a b : value r =
+  let* prio, st = reflected_priority st a b "__eq__" in
+  let first, second = if prio then (b, a) else (a, b) in
+  let* r, st = try_richcmp st first "__eq__" [ second ] in
+  match r with
+  | Some v -> Ok (v, st)
+  | None -> (
+      let* r, st = try_richcmp st second "__eq__" [ first ] in
+      match r with Some v -> Ok (v, st) | None -> Ok (Bool (a = b), st))
+
+(* ref: 3.3.1 __ne__ — raw result of x != y for instances: a custom __ne__ (with
+   reflected-operand priority), else the negation of __eq__. *)
+and instance_ne_value st a b : value r =
+  let* prio, st = reflected_priority st a b "__ne__" in
+  let first, second = if prio then (b, a) else (a, b) in
+  let* r, st = try_richcmp st first "__ne__" [ second ] in
+  match r with
+  | Some v -> Ok (v, st)
+  | None -> (
+      let* r, st = try_richcmp st second "__ne__" [ first ] in
+      match r with
+      | Some v -> Ok (v, st)
+      | None ->
+          let* e, st = py_eq st a b in
+          Ok (Bool (not e), st))

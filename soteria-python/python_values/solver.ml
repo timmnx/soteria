@@ -14,7 +14,7 @@ module Make
     (Intf :
       Solvers.Solver_interface.S
         with type value = Svalue.t
-         and type ty = Svalue.ty) : Soteria.Symex.Solver.Mutable_incremental =
+         and type ty = Svalue.ty) =
 struct
   module Value = Typed
 

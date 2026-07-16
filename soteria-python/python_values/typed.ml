@@ -10,7 +10,12 @@ module T = struct
   type sint = [ `Nonzero | `Zero ]
   type sfloat = [ `Float ]
   type snumber = [ `Nonzero | `Zero | `Float ]
-  type any = [ `Bool | `Nonzero | `Zero | `Float ]
+  type sstr = [ `Str ]
+  type others = [ `Others ]
+  type not_yet_implemented = [ `NotYetImplemented ]
+
+  type any =
+    [ `Bool | `Nonzero | `Zero | `Float | `Str | `Others | `NotYetImplemented ]
 
   let pp_sbool _ _ = ()
   let pp_sint _ _ = ()
@@ -46,6 +51,7 @@ let cast_float x = if is_float x.node.ty then Some x else None
 
 let cast_checked2 x y =
   if equal_ty x.node.ty y.node.ty then Some (x, y, x.node.ty) else None
+
 
 module SBool = struct
   include SBool
