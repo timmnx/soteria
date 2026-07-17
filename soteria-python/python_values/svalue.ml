@@ -179,7 +179,12 @@ let rec pp ft t =
       match range with
       | Some (min, max) -> pf ft "%a(V|%d-%d|)" Nop.pp op min max
       | None -> pf ft "%a(%a)" Nop.pp op (list ~sep:comma pp) l)
-  | _ -> failwith "ToDo (in Svalue.pp)"
+| None_ -> pf ft "None_"
+| Null -> pf ft "Null"
+| Float f -> pf ft "%f" f
+| Str s -> pf ft "%s" s
+| Ref i -> pf ft "Ref(%d)" i
+| _ -> failwith "ToDo (in Svalue.pp)"
 
 let rec sure_neq (a : t) (b : t) =
   (not (equal_ty a.node.ty b.node.ty))

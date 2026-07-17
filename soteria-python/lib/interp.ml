@@ -369,18 +369,18 @@ and OperandEvaluation : sig
 end = struct
   let const_value (c : Ast.const) : (value, err, 'a) Result.t =
     match c with
-    | None_ -> failwith "ToDo"
+    | None_ -> S_val.SOthers.none_ |> Result.ok
     (* | Bool b -> Result.ok (S_val.of_bool b, st) *)
     | Bool b -> S_val.SBool.of_bool b |> Result.ok
     | Int i -> S_val.SNumeric.int_z i |> Result.ok
     | Float f -> S_val.SNumeric.float f |> Result.ok
-    | Complex { re; im } -> failwith "ToDo"
-    | Str _ -> failwith "ToDo"
-    | Bytes _ -> failwith "ToDo"
-    | Tuple _ -> failwith "ToDo"
-    | Frozenset _ -> failwith "ToDo"
-    | Code _ -> failwith "ToDo"
-    | Ellipsis -> failwith "ToDo"
+    | Complex { re; im } -> failwith "ToDo: Complex (in Interp.OperandEvaluation.const_value)"
+    | Str _ -> failwith "ToDo: Str (in Interp.OperandEvaluation.const_value)"
+    | Bytes _ -> failwith "ToDo: Bytes (in Interp.OperandEvaluation.const_value)"
+    | Tuple _ -> failwith "ToDo: Tuple (in Interp.OperandEvaluation.const_value)"
+    | Frozenset _ -> failwith "ToDo: Frozenset (in Interp.OperandEvaluation.const_value)"
+    | Code _ -> failwith "ToDo: Code (in Interp.OperandEvaluation.const_value)"
+    | Ellipsis -> failwith "ToDo: Ellipsis (in Interp.OperandEvaluation.const_value)"
 
   let eval_operands st (f : frame) (ops : Phir.value list) :
       ((value list * frame) * state, err, 'a) Result.t =
@@ -413,7 +413,39 @@ end = struct
 end
 (* ---------- calls ---------------------------------------------------- *)
 
-(* TODO *)
+and Call : sig
+  val call : state -> value -> value list -> (string * value) list -> (value * state, 'err, 'a) Result.t
+end = struct
+  let call st (callee : value) (args : value list) kwargs : value r =
+    match callee with
+    | Builtin name -> call_builtin st name args kwargs
+    | Bound (g, self) -> call st g (self :: args) kwargs
+    | Ref a -> (
+        match heap_get st a with
+        | Func fn -> call_func st fn args kwargs
+        | Class { builtin = Some tag; _ } -> builtin_class_call st tag args kwargs
+        (* ref: 3.3.3 — calling a class invokes its metaclass's __call__; the
+           default (type.__call__) instantiates. A user metaclass __call__
+           overrides instantiation. *)
+        | Class { meta = Some meta; _ } -> (
+            let* mcall, st = type_lookup st meta "__call__" in
+            match mcall with
+            | Some (Builtin "type.__call__") | None ->
+                instantiate st a args kwargs
+            | Some f ->
+                call st
+                  (bind_class_value st f ~inst:(Ref a) ~cls_addr:meta)
+                  args kwargs)
+        | Class _ -> instantiate st a args kwargs
+        | Instance _ -> (
+            let* m, st = find_dunder st callee "__call__" in
+            match m with
+            | Some f -> call st f args kwargs
+            | None -> not_callable st callee)
+        | _ -> not_callable st callee)
+    | _ -> not_callable st callee
+
+end
 
 (* ---------- frame execution ----------------------------------------- *)
 and FrameExecution : sig
@@ -434,7 +466,24 @@ end = struct
         let** (v, f), st = op1 st f v in
         let** f, st = Variables.store_var st f x v in
         Result.ok (Next f, st)
-    | _ -> failwith "ToDo"
+    | Return v ->
+        let** (v, f), st = op1 st f v in
+        ignore f;
+        Result.ok (Fin (Returned v), st)
+    | Call { f = fv; self; args } -> (
+            let** (vals, f), st =
+              OperandEvaluation.eval_operands st f (fv :: self :: Array.to_list args)
+            in
+            match vals with
+            | callee :: selfv :: argv ->
+                let argv =
+                  if S_val.SOthers.is_null selfv then
+                    argv
+                  else selfv :: argv in
+                let** v, st = call st callee argv [] in
+                Ok (Next (push f v), st)
+            | _ -> assert false)
+    | _ -> failwith ("ToDo in Interp.FrameExecution.exec_instr for "^ Py_value.strinf_of_intr ins)
 
   let rec run_frame st (f : frame) :
       (frame_outcome * state, 'err, 'a) Symex.Result.t =
@@ -502,5 +551,6 @@ let pp_results ft
   pp ft v
 
 let run (code : Phir.code) =
+  Fmt.pr "@[Test@ @]@?";
   let results = Symex.run ~mode:OX (run_module code) in
   Fmt.pr "@[<v 2>Program executed with result:@ %a@]@?" pp_results results
