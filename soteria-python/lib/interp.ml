@@ -15,6 +15,10 @@ module Ast = Pytecode.Ast
 
    type 'a t = ('a, Error.with_trace, State.syn list) SSM.Result.t end *)
 
+type err = string
+
+let raise_py _ a b = Result.error (a ^ b)
+
 type frame_outcome = Returned of value | Yielded of value * frame
 
 (* What executing one instruction does to the frame. *)
@@ -39,29 +43,62 @@ module rec Dictionaries : sig
     state ->
     (value * value) list ->
     'b ->
-    (value option * state, 'err, 'a) Result.t
+    (value option * state, err, 'a) Result.t
 
-  val check_hashable : state -> value -> (unit * state, 'err, 'a) Result.t
+  val check_hashable : state -> value -> (unit * state, err, 'a) Result.t
 
   val dict_set :
-    state -> int -> value -> value -> (unit * state, 'err, 'a) Result.t
+    state -> int -> value -> value -> (unit * state, err, 'a) Result.t
 
-  val dict_del : state -> int -> value -> (bool * state, 'err, 'a) Result.t
-  val dget : state -> int -> value -> (value option * state, 'err, 'a) Result.t
+  val dict_del : state -> int -> value -> (bool * state, err, 'a) Result.t
+  val dget : state -> int -> value -> (value option * state, err, 'a) Result.t
 end = struct
-  let dict_find = failwith "ToDo"
-  let check_hashable = failwith "ToDo"
-  let dict_set = failwith "ToDo"
-  let dict_del = failwith "ToDo"
-  let dget = failwith "ToDo"
+  let dict_find _ = failwith "ToDo (in Lib.Interp.Dictionaries.dict_find)"
+
+  let check_hashable st key : (unit * state, err, 'a) Result.t =
+    match deref (st: state) (key: value) with
+    | Some (List _) -> raise_py st "TypeError" "unhashable type: 'list'"
+    | Some (Dict _) -> raise_py st "TypeError" "unhashable type: 'dict'"
+    | Some (Set _) -> raise_py st "TypeError" "unhashable type: 'set'"
+    | Some (Bytearray _) -> raise_py st "TypeError" "unhashable type: 'bytearray'"
+    | Some (Instance { cls; _ }) -> (
+        (* ref: 3.3.1 __hash__ — a class that overrides __eq__ without defining
+           __hash__ (or sets __hash__ = None) has unhashable instances *)
+          raise_py st "TypeError" "unhashable type: ToDo in Interp.Dictionnaries.check_hashable"
+        (* let unhashable st =
+            (* (Printf.sprintf "unhashable type: '%s'" (type_name st key)) *)
+        in
+        let** h, st = ClassesAndAttributes.type_lookup st cls "__hash__" in
+        match h with
+        | Some None_ -> unhashable st
+        | Some _ -> Ok ((), st)
+        | None -> (
+            let* eq, st = type_lookup st cls "__eq__" in
+            match eq with Some _ -> unhashable st | None -> Ok ((), st)) *)
+    )
+    | _ -> Result.ok ((), st)
+
+  let dict_set st a key v : (unit * state, err, 'a) Result.t =
+    let** (), st = check_hashable st key in
+    let rec go st acc = function
+      | [] -> Result.ok (List.rev_append acc [ (key, v) ], st)
+      | (k, v0) :: rest ->
+          let** eq, st = Equality.py_eq st k key in
+          if eq then Result.ok (List.rev_append acc ((k, v) :: rest), st)
+          else go st ((k, v0) :: acc) rest
+    in
+    let** pairs, st = go st [] (dict_pairs st a) in
+    Result.ok ((), heap_set st a (Dict pairs))
+  let dict_del _ = failwith "ToDo (in Lib.Interp.Dictionaries.dict_del)"
+  let dget _ = failwith "ToDo (in Lib.Interp.Dictionaries.dget)"
 end
 
 (* ---------- equality ----------------------------------------------- *)
 and Equality : sig
   val cmp_unwrap :
-    state -> value -> string list -> (value * state, 'err, 'a) Result.t
+    state -> value -> string list -> (value * state, err, 'a) Result.t
 
-  val py_eq : state -> value -> value -> (bool * state, 'err, 'a) Result.t
+  val py_eq : state -> value -> value -> (bool * state, err, 'a) Result.t
 end = struct
   let cmp_unwrap st v (dunders : string list) :
       (value * state, 'err, 'a) Symex.Result.t =
@@ -81,10 +118,38 @@ end = struct
   let eq_dunders = [ "__eq__"; "__ne__" ]
   let order_dunders = [ "__lt__"; "__gt__"; "__le__"; "__ge__" ]
 
-  let py_eq st a b : (bool * state, 'err, 'a) Result.t =
+  let py_eq st a b : (bool * state, err, 'a) Result.t =
     let** a, st = cmp_unwrap st a eq_dunders in
     let** b, st = cmp_unwrap st b eq_dunders in
-    failwith "ToDo"
+    match S_val.SBool.to_bool (a ==@ b) with
+    | Some b -> Result.ok (b, st)
+    | None -> Result.error "Not a boolean (in Interp.Equality.py_eq)"
+    (* match (a, b) with
+    | _ when is_number a && is_number b -> Result.ok (num_eq a b, st)
+    | _ when (is_complex a && is_numeric b) || (is_numeric a && is_complex b) ->
+        let ar, ai = Option.get (as_complex a)
+        and br, bi = Option.get (as_complex b) in
+        Result.ok (ar = br && ai = bi, st)
+    (* | Str x, Str y -> Result.ok (x = y, st) *)
+    | _, _ when as_bytes st a <> None && as_bytes st b <> None ->
+        (* ref: 3.2.5 — bytes and bytearray compare across their types *)
+        Result.ok (as_bytes st a = as_bytes st b, st)
+    (* | None_, None_ -> Result.ok (true, st) *)
+    (* | Tuple xs, Tuple ys -> seq_eq st xs ys *)
+    (* | Ref x, Ref y when x = y -> Result.ok (true, st) *)
+    (* | Ref x, Ref y -> (
+        match (heap_get st x, heap_get st y) with
+        | List xs, List ys -> seq_eq st xs ys
+        | Dict xs, Dict ys -> dict_eq st xs ys
+        | (Set xs | Frozenset xs), (Set ys | Frozenset ys) -> set_eq st xs ys
+        | Instance _, _ | _, Instance _ -> instance_eq st a b
+        | _ -> Result.ok (false, st))
+    | (Ref _, _ | _, Ref _) when is_instance_value st a || is_instance_value st b
+      ->
+        instance_eq st a b *)
+    (* singletons and other immediates compare by identity: None/Ellipsis/
+       NotImplemented/builtins are equal only to themselves *)
+    | _ -> Result.ok (a = b, st) *)
 end
 (* ---------- ordering ----------------------------------------------- *)
 
@@ -106,9 +171,10 @@ end
 
 and ClassesAndAttributes : sig
   val type_lookup :
-    state -> int -> string -> (value option * state, 'err, 'a) Result.t
+    state -> int -> string -> (value option * state, err, 'a) Result.t
 end = struct
-  let type_lookup = failwith "ToDo"
+  let type_lookup _ =
+    failwith "ToDo (in Lib.Interp.ClassesAndAttributes.type_lookup)"
 end
 
 (* ---------- isinstance / issubclass -------------------------------- *)
@@ -125,8 +191,8 @@ end
 
 (* ---------- operators ----------------------------------------------- *)
 and Operators : sig
-  val are_addable : value -> value -> (value * value, string, 'a) Result.t
-  val cast_to_bool : value -> (value, string, 'a) Result.t
+  val are_addable : value -> value -> (value * value, err, 'a) Result.t
+  val cast_to_bool : value -> (value, err, 'a) Result.t
 
   val binary :
     Phir.binop ->
@@ -134,13 +200,13 @@ and Operators : sig
     value ->
     value ->
     state ->
-    (value * state, string, 'a) Result.t
+    (value * state, err, 'a) Result.t
 
   val unary :
-    Phir.unop -> value -> state -> (value * state, string, 'a) Result.t
+    Phir.unop -> value -> state -> (value * state, err, 'a) Result.t
 end = struct
   let are_addable (v1 : value) (v2 : value) :
-      (value * value, string, 'a) Result.t =
+      (value * value, err, 'a) Result.t =
     match S_val.are_addable v1 v2 with
     | Some (v1', v2') -> Result.ok (v1', v2')
     | None -> Result.error "Type error in add"
@@ -151,7 +217,7 @@ end = struct
     | None -> Result.error "Type error"
 
   let binary (op : Phir.binop) ~inplace (a : value) (b : value) st :
-      (S_val.t * state, 'err, 'a) Result.t =
+      (S_val.t * state, err, 'a) Result.t =
     let** v =
       match op with
       | Add ->
@@ -173,7 +239,7 @@ end = struct
     Result.ok (v, st)
 
   let rec unary (op : Phir.unop) (v : value) st :
-      (value * state, 'err, 'a) Result.t =
+      (value * state, err, 'a) Result.t =
     let** v' =
       match op with
       | Negative -> ~-v |> Result.ok
@@ -194,7 +260,7 @@ end
 (* ---------- variables ---------------------------------------------- *)
 and Variables : sig
   val store_var :
-    state -> frame -> Phir.var -> value -> (frame * state, 'err, 'a) Result.t
+    state -> frame -> Phir.var -> value -> (frame * state, err, 'a) Result.t
 end = struct
   (* ref: 4.2.2 Resolution of names — search the namespace chain in order (e.g.
    local/enclosing, then global, then builtins), raising NameError if absent. *)
@@ -241,7 +307,7 @@ end = struct
   (* ref: 4.2.1 Binding of names / 7.2 Assignment statements — bind a variable:
      write a local slot, a closure cell, or a namespace (ns/globals) entry. *)
   let store_var st (f : frame) (x : Phir.var) v :
-      (frame * state, 'err, 'a) Result.t =
+      (frame * state, err, 'a) Result.t =
     match x with
     | Fast i ->
         let slots =
@@ -256,15 +322,13 @@ end = struct
       | Some (Ref ca) -> Ok (f, heap_set st ca (Cell (Some v)))
       | _ -> raise_py st "RuntimeError" "store to non-cell slot")|}
     | Name s ->
-        failwith
-          {|
-      let* (), st = dict_set st f.ns (Str s) v in
-      Ok (f, st)|}
+        let** (), st = Dictionaries.dict_set st f.ns (S_val.SStr.str s) v in
+        Result.ok (f, st)
     | Global s ->
-        failwith
-          {|
-      let* (), st = dict_set st f.globals (Str s) v in
-      Ok (f, st)|}
+        let** (), st =
+          Dictionaries.dict_set st f.globals (S_val.SStr.str s) v
+        in
+        Result.ok (f, st)
 
   (* ref: 7.5 The del statement / 4.2.1 — unbind a variable; deleting an unbound
    local raises UnboundLocalError, an unbound global/name a NameError. *)
@@ -295,21 +359,21 @@ end
 
 (* ---------- operand evaluation -------------------------------------- *)
 and OperandEvaluation : sig
-  val const_value : Ast.const -> (value, 'err, 'a) Result.t
+  val const_value : Ast.const -> (value, err, 'a) Result.t
 
   val eval_operands :
     state ->
     frame ->
     Phir.value list ->
-    ((value list * frame) * state, 'err, 'a) Result.t
+    ((value list * frame) * state, err, 'a) Result.t
 end = struct
-  let const_value (c : Ast.const) : (value, 'err, 'a) Result.t =
+  let const_value (c : Ast.const) : (value, err, 'a) Result.t =
     match c with
     | None_ -> failwith "ToDo"
     (* | Bool b -> Result.ok (S_val.of_bool b, st) *)
-    | Bool b -> S_val.of_bool b |> Result.ok
-    | Int i -> S_val.SInt.int_z i |> Result.ok
-    | Float f -> S_val.SFloat.float f |> Result.ok
+    | Bool b -> S_val.SBool.of_bool b |> Result.ok
+    | Int i -> S_val.SNumeric.int_z i |> Result.ok
+    | Float f -> S_val.SNumeric.float f |> Result.ok
     | Complex { re; im } -> failwith "ToDo"
     | Str _ -> failwith "ToDo"
     | Bytes _ -> failwith "ToDo"
@@ -319,7 +383,7 @@ end = struct
     | Ellipsis -> failwith "ToDo"
 
   let eval_operands st (f : frame) (ops : Phir.value list) :
-      ((value list * frame) * state, 'err, 'a) Result.t =
+      ((value list * frame) * state, err, 'a) Result.t =
     let n_stack =
       List.length (List.filter (function Phir.Stack -> true | _ -> false) ops)
     in
@@ -354,13 +418,13 @@ end
 (* ---------- frame execution ----------------------------------------- *)
 and FrameExecution : sig
   val exec_instr :
-    state -> frame -> Phir.instr -> (istep * state, 'err, 'a) Symex.Result.t
+    state -> frame -> Phir.instr -> (istep * state, err, 'a) Result.t
 
   val run_frame :
-    state -> frame -> (frame_outcome * state, 'err, 'a) Symex.Result.t
+    state -> frame -> (frame_outcome * state, err, 'a) Result.t
 end = struct
   let exec_instr st (f : frame) (ins : Phir.instr) :
-      (istep * state, 'err, 'a) Symex.Result.t =
+      (istep * state, err, 'a) Result.t =
     let op1 st f v =
       let** (vals, f), st = OperandEvaluation.eval_operands st f [ v ] in
       Result.ok ((List.hd vals, f), st)
@@ -406,9 +470,10 @@ let run_module (code : Phir.code) =
       closure = [];
     }
   in
-  let process = FrameExecution.run_frame st frame in
-  let results = Symex.Result.run ~mode:OX process in
-  results
+  let** process = FrameExecution.run_frame st frame in
+  match process with
+  | Returned v, st -> Result.ok (v, st)
+  | _ -> failwith "ToDo (in run_module)"
 (* let go () = match run_frame st frame with | Ok (Returned _, st) -> Ok
    (collected_output st) | Ok (Yielded _, _) -> Error "module-level yield?" |
    Error (exc, st) -> let msg = match py_str st exc with Ok (s, _) -> s | Error
@@ -416,3 +481,26 @@ let run_module (code : Phir.code) =
    exc) msg) in match handle go with | result -> result | exception
    Stack_overflow -> Error "OCaml stack overflow" | exception e -> Error
    ("interpreter bug: " ^ Printexc.to_string e) *)
+
+let pp_results ft
+    (v :
+      (( value * state,
+         'a,
+         'b )
+       Soteria.Soteria_std.Compo_res.t
+      * S_numeric.syn list)
+      list) =
+  let ( @@ ) = Stdlib.( @@ ) in
+  let pp =
+    Fmt.list
+    @@ Fmt.pair
+         (Soteria.Soteria_std.Compo_res.pp
+            ~ok:(Fmt.pair S_val.ppa Fmt.nop)
+            ~err:Fmt.nop ~miss:Fmt.nop)
+         (Fmt.list S_numeric.pp_syn)
+  in
+  pp ft v
+
+let run (code : Phir.code) =
+  let results = Symex.run ~mode:OX (run_module code) in
+  Fmt.pr "@[<v 2>Program executed with result:@ %a@]@?" pp_results results

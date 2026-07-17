@@ -1,0 +1,264 @@
+module type Svalue = sig
+
+module Var = Soteria.Symex.Var
+type ty = TBool | TInt | TFloat | TStr | TOthers | TNotYetImplemented
+val equal_ty : ty -> ty -> bool
+val pp_ty : Format.formatter -> ty -> unit
+val show_ty : ty -> string
+val compare_ty : ty -> ty -> int
+val t_bool : ty
+val t_int : ty
+val t_float : ty
+val t_str : ty
+val t_others : ty
+val t_not_yet_implemented : ty
+val is_int : ty -> bool
+val is_float : ty -> bool
+module Nop :
+  sig
+    type t = Distinct
+    val equal : t -> t -> bool
+    val pp : Format.formatter -> t -> unit
+    val show : t -> string
+    val compare : t -> t -> int
+  end
+module Unop :
+  sig
+    val equal_fpclass : 'a -> 'a -> bool
+    val compare_fpclass : 'a -> 'a -> int
+    type t = Negative | Not | Invert | To_bool
+    val equal : t -> t -> bool
+    val compare : t -> t -> int
+    val pp_signed : Format.formatter -> bool -> unit
+    val pp : Format.formatter -> t -> unit
+  end
+module Binop :
+  sig
+    type t =
+        Add
+      | Sub
+      | Mul
+      | Div
+      | Floor_div
+      | Mod
+      | Pow
+      | Mat_mul
+      | And
+      | Or
+      | BitAnd
+      | BitOr
+      | BitXor
+      | BitLshift
+      | BitRshift
+      | Eq
+      | Ne
+      | Lt
+      | Gt
+      | Le
+      | Ge
+    val equal : t -> t -> bool
+    val show : t -> string
+    val compare : t -> t -> int
+    val pp : Format.formatter -> t -> unit
+  end
+val pp_hash_consed : ('a -> 'b -> 'c) -> 'a -> 'b Hc.hash_consed -> 'c
+val equal_hash_consed : 'a -> 'b Hc.hash_consed -> 'c Hc.hash_consed -> bool
+val compare_hash_consed : 'a -> 'b Hc.hash_consed -> 'c Hc.hash_consed -> int
+type t_kind =
+    Var of Var.t
+  | None_
+  | Bool of bool
+  | Int of Z.t
+  | Float of float
+  | Complex of float * float
+  | Str of string
+  | Bytes of string
+  | Tuple of t list
+  | Slice of t * t * t
+  | Range of Z.t * Z.t * Z.t
+  | Builtin of string
+  | Bound of t * t
+  | Ref of int
+  | Null
+  | Not_implemented
+  | Ellipsis
+  | Unop of Unop.t * t
+  | Binop of Binop.t * t * t
+  | Nop of Nop.t * t list
+  | Ite of t * t * t
+and t_node = { kind : t_kind; ty : ty; }
+and t = t_node Hc.hash_consed
+val pp_t_kind : Format.formatter -> t_kind -> unit
+val show_t_kind : t_kind -> string
+val pp_t_node : Format.formatter -> t_node -> unit
+val show_t_node : t_node -> string
+val pp : Format.formatter -> t -> unit
+val show : t -> string
+val equal_t_kind : t_kind -> t_kind -> bool
+val equal_t_node : t_node -> t_node -> bool
+val equal : t -> t -> bool
+val compare_t_kind : t_kind -> t_kind -> int
+val compare_t_node : t_node -> t_node -> int
+val compare : t -> t -> int
+val unique_tag : 'a Hc.hash_consed -> int
+val hash : 'a Hc.hash_consed -> int
+val kind : t_node Hc.hash_consed -> t_kind
+val is_bool_ty : ty -> bool
+val iter_vars : t -> (Var.t * ty -> unit) -> unit
+val pp_full : Format.formatter -> t_node Hc.hash_consed -> unit
+val pp : t Fmt.t
+val sure_neq : t -> t -> bool
+module Hcons :
+  sig
+    type key = t_node
+    val clear : unit -> unit
+    val hashcons : key -> key Hc.hash_consed
+    val stats : unit -> Hashtbl.statistics
+    val length : unit -> int
+  end
+val ( <| ) : t_kind -> ty -> t
+val mk_var : Var.t -> ty -> t
+val mk_commut_binop : Binop.t -> t -> t -> t_kind
+module SBool :
+  sig
+    val v_true : t
+    val v_false : t
+    val to_bool : t -> bool option
+    val of_bool : bool -> t
+    val and_ : t -> t -> t
+    val or_ : t -> t -> t
+    val not : t -> t
+    val ite : t -> t -> t -> t
+    val sem_eq : t -> t -> t
+    val sem_eq_untyped : t -> t -> t
+    val and_lazy : t -> (unit -> t) -> t
+    val or_lazy : t -> (unit -> t) -> t
+    val sem_ne : t -> t -> t
+    val gt : t -> t -> t
+    val ge : t -> t -> t
+    val lt : t -> t -> t
+    val le : t -> t -> t
+    val conj : t list -> t
+    val split_ands : t -> (t -> unit) -> unit
+    val distinct : t list -> t
+    val distinct_seq : t Seq.t -> t
+  end
+module SNumeric :
+  sig
+    val int_z : Z.t -> t
+    val int_float : float -> t
+    val int : int -> t
+    val nonzero_z : Z.t -> t
+    val nonzero : int -> t
+    val zero : t
+    val one : t
+    val add : t -> t -> t
+    val sub : t -> t -> t
+    val mul : t -> t -> t
+    val floor_div : t -> t -> t
+    val is_mod : t -> Z.t -> bool
+    val mod_ : t -> t -> t
+    val pow : t -> t -> t
+    val neg : t -> t
+    val invert : t -> t
+    val lt : t -> t -> t
+    val le : t -> t -> t
+    val ge : t -> t -> t
+    val gt : t -> t -> t
+    val sem_eq : t -> t -> t
+    val sem_ne : t -> t -> t
+    val of_bool : t -> t
+    val to_bool : t -> t
+    val of_float : t -> t
+    val to_float : t -> t
+  end
+module SFloat : sig val float : float -> t end
+module SStr : sig val str : string -> t val get_str : t -> string option end
+module SOthers :
+  sig
+    val none_ : t
+    val null : t
+    val mk_ref : int -> t
+    val mk_builtin : string -> t
+    val not_implemented : t
+    val ellipsis : t
+    val is_none_ : t -> bool
+    val is_null : t -> bool
+    val get_ref : t -> int option
+    val get_builtin : t -> string option
+  end
+module NumericCoercions_Pure :
+  sig
+    val as_z : t -> Z.t option
+    val as_float : t -> float option
+    val is_number : t_node Hc.hash_consed -> bool
+    val num_eq : t -> t -> t
+    val num_lt : t -> t -> bool
+    val num_le : t -> t -> bool
+    val val_identical : t_kind -> t_kind -> bool
+  end
+val neg : t -> t
+val not : t -> t
+val invert : t -> t
+val cast_to_bool : t -> t
+val add : t -> t -> t
+val sub : t -> t -> t
+val mul : t -> t -> t
+val div : t -> t -> t
+val floor_div : t -> t -> t
+val mod_ : t -> t -> t
+val pow : t -> t -> t
+val mat_mul : t -> t -> t
+val and_ : t -> t -> t
+val or_ : t -> t -> t
+val bit_and : t -> t -> t
+val bit_or : t -> t -> t
+val bit_xor : t -> t -> t
+val bit_lshift : t -> t -> t
+val bit_rshift : t -> t -> t
+val sem_eq : t -> t -> t
+val sem_ne : t -> t -> t
+val lt : t -> t -> t
+val leq : t -> t -> t
+val gt : t -> t -> t
+val geq : t -> t -> t
+val mk_unop : Unop.t -> t -> t
+val mk_binop : Binop.t -> t -> t -> t
+val mk_nop : Nop.t -> t list -> t
+val not : t -> t
+val are_addable : t -> t -> (t * t) option
+module Infix :
+  sig
+    val int_z : 'a
+    val int : 'a
+    val ( +@ ) : t -> t -> t
+    val ( -@ ) : t -> t -> t
+    val ( ~- ) : t -> t
+    val ( ~! ) : t -> t
+    val ( ~~ ) : t -> t
+    val ( *@ ) : t -> t -> t
+    val ( /@ ) : t -> t -> t
+    val ( //@ ) : t -> t -> t
+    val ( %@ ) : t -> t -> t
+    val ( **@ ) : t -> t -> t
+    val ( @@ ) : t -> t -> t
+    val ( &&@ ) : t -> t -> t
+    val ( ||@ ) : t -> t -> t
+    val ( &@ ) : t -> t -> t
+    val ( |@ ) : t -> t -> t
+    val ( ^@ ) : t -> t -> t
+    val ( >>@ ) : t -> t -> t
+    val ( <<@ ) : t -> t -> t
+    val ( ==@ ) : t -> t -> t
+    val ( !=@ ) : t -> t -> t
+    val ( >@ ) : t -> t -> t
+    val ( >=@ ) : t -> t -> t
+    val ( <@ ) : t -> t -> t
+    val ( <=@ ) : t -> t -> t
+  end
+module Syntax :
+  sig
+    module Sym_int_syntax :
+      sig val mk_nonzero : 'a val zero : unit -> 'a val one : unit -> 'a end
+  end
+end

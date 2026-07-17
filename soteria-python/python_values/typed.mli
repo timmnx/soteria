@@ -17,10 +17,10 @@ module T : sig
   (** A symbolic float. *)
   type sfloat = [ `Float ]
 
-  type snumber = [ `Nonzero | `Zero | `Float ]
+  type snumeric = [ `Nonzero | `Zero | `Float ]
   type sstr = [ `Str ]
-  type others = [ `Others ]
-  type not_yet_implemented = [ `NotYetImplemented ]
+  type sothers = [ `Others ]
+  type snot_yet_implemented = [ `NotYetImplemented ]
 
   type any =
     [ `Bool | `Nonzero | `Zero | `Float | `Str | `Others | `NotYetImplemented ]
@@ -45,6 +45,9 @@ val equal_ty : 'a ty -> 'b ty -> bool
 val t_bool : [> sbool ] ty
 val t_int : [> sint ] ty
 val t_float : [> sfloat ] ty
+val t_str : [> sstr ] ty
+val t_others : [> sothers ] ty
+val t_not_yet_implemented : [> snot_yet_implemented ] ty
 
 (** {2 Typed svalues} *)
 
@@ -55,7 +58,6 @@ val is_bool_ty : 'a ty -> bool
 
 (** Basic value operations *)
 
-val is_bool_ty : 'a ty -> bool
 val get_ty : 'a t -> Svalue.ty
 val type_type : Svalue.ty -> 'a ty
 val untype_type : 'a ty -> Svalue.ty
@@ -87,7 +89,7 @@ val sem_eq_untyped : 'a t -> 'b t -> sbool t
 
 (** Boolean operations *)
 
-module type Bool_ := sig
+module SBool : sig
   val v_true : [> sbool ] t
   val v_false : [> sbool ] t
   val of_bool : bool -> [> sbool ] t
@@ -109,22 +111,14 @@ module type Bool_ := sig
       errors, like a division by zero in [0 == x || n / x] when [x] is [0]. *)
   val or_lazy : [< sbool ] t -> (unit -> [< sbool ] t) -> [> sbool ] t
 
-  val not : [< sbool ] t -> [> sbool ] t
+  val not_ : [< sbool ] t -> [> sbool ] t
   val distinct : 'a t list -> [> sbool ] t
   val distinct_seq : 'a t Seq.t -> [> sbool ] t
   val ite : [< sbool ] t -> 'a t -> 'a t -> 'a t
 end
 
-include Bool_
-
-module SBool : sig
-  include Bool_
-
-  type t = sbool
-end
-
 (** Integer operations *)
-module SInt : sig
+module SNumeric : sig
   (* constructor *)
   val int_z : Z.t -> [> sint ] t
   val int_float : float -> [> sint ] t
@@ -133,6 +127,7 @@ module SInt : sig
   val nonzero : int -> [> nonzero ] t
   val zero : [> zero ] t
   val one : [> nonzero ] t
+  val float : float -> [> sfloat ] t
 
   (* arithmetic *)
   val add : [< sint ] t -> [< sint ] t -> [> sint ] t
@@ -147,20 +142,11 @@ module SInt : sig
   (* inequalities *)
   val lt : [< sint ] t -> [< sint ] t -> [> sbool ] t
   val le : [< sint ] t -> [< sint ] t -> [> sbool ] t
-  val ge : [< sint ] t -> [< sint ] t -> [> sbool ] t
-  val gt : [< sint ] t -> [< sint ] t -> [> sbool ] t
   val sem_eq : [< sint ] t -> [< sint ] t -> [> sbool ] t
-  val sem_ne : [< sint ] t -> [< sint ] t -> [> sbool ] t
   val of_bool : [< sbool ] t -> [> sint ] t
   val to_bool : [< sint ] t -> [> sbool ] t
   val of_float : [< sfloat ] t -> [> sint ] t
   val to_float : [< sint ] t -> [> sfloat ] t
-end
-
-(** Floating point operations *)
-
-module SFloat : sig
-  val float : float -> [> sfloat ] t
 end
 
 module SStr : sig
@@ -169,34 +155,38 @@ module SStr : sig
 end
 
 module SOthers : sig
-  val none_ : [> others ] t
-  val null : [> others ] t
-  val mk_ref : int -> [> others ] t
-  val mk_builtin : string -> [> others ] t
-  val not_implemented : [> others ] t
-  val ellipsis : [> others ] t
-  val null : [> others ] t
+  val none_ : [> sothers ] t
+  val null : [> sothers ] t
+  val mk_ref : int -> [> sothers ] t
+  val mk_builtin : string -> [> sothers ] t
+  val not_implemented : [> sothers ] t
+  val ellipsis : [> sothers ] t
+  val null : [> sothers ] t
   val is_none_ : [< any ] t -> bool
   val is_null : [< any ] t -> bool
   val get_ref : [< any ] t -> int option
   val get_builtin : [< any ] t -> string option
 end
 
+val to_bool : 'a t -> bool option
+val of_bool : bool -> sbool t
+
 (** All operations *)
 val neg : [< any ] t -> [> any ] t
+val not_ : [< any ] t -> [> sbool ] t
+val invert : [< any ] t -> [> any ] t
+val to_bool_ : [< any ] t -> [> sbool ] t
 
 val not : [< any ] t -> [> sbool ] t
-val invert : [< any ] t -> [> any ] t
 
 (* val to_bool : [< any ] t -> [> sbool ] t *)
-val cast_to_bool : [< any ] t -> [> sbool ] t
-val add : [< any ] t -> [< any ] t -> [> snumber ] t
-val sub : [< any ] t -> [< any ] t -> [> snumber ] t
-val mul : [< any ] t -> [< any ] t -> [> snumber ] t
+val add : [< any ] t -> [< any ] t -> [> snumeric ] t
+val sub : [< any ] t -> [< any ] t -> [> snumeric ] t
+val mul : [< any ] t -> [< any ] t -> [> snumeric ] t
 val div : [< any ] t -> [< any ] t -> [> sfloat ] t
-val floor_div : [< any ] t -> [< any ] t -> [> snumber ] t
-val mod_ : [< any ] t -> [< any ] t -> [> snumber ] t
-val pow : [< any ] t -> [< any ] t -> [> snumber ] t
+val floor_div : [< any ] t -> [< any ] t -> [> snumeric ] t
+val mod_ : [< any ] t -> [< any ] t -> [> snumeric ] t
+val pow : [< any ] t -> [< any ] t -> [> snumeric ] t
 val mat_mul : [< any ] t -> [< any ] t -> [> any ] t
 val and_ : [< any ] t -> [< any ] t -> [> sbool ] t
 val or_ : [< any ] t -> [< any ] t -> [> sbool ] t
@@ -214,16 +204,16 @@ val geq : [< any ] t -> [< any ] t -> [> sbool ] t
 
 module Infix : sig
   (* val int_z : Z.t -> t val int : int -> t *)
-  val ( +@ ) : [< any ] t -> [< any ] t -> [> snumber ] t
-  val ( -@ ) : [< any ] t -> [< any ] t -> [> snumber ] t
-  val ( ~- ) : [< any ] t -> [> snumber ] t
+  val ( +@ ) : [< any ] t -> [< any ] t -> [> snumeric ] t
+  val ( -@ ) : [< any ] t -> [< any ] t -> [> snumeric ] t
+  val ( ~- ) : [< any ] t -> [> snumeric ] t
   val ( ~! ) : [< any ] t -> [> sbool ] t
-  val ( ~~ ) : [< any ] t -> [> snumber ] t
-  val ( *@ ) : [< any ] t -> [< any ] t -> [> snumber ] t
+  val ( ~~ ) : [< any ] t -> [> snumeric ] t
+  val ( *@ ) : [< any ] t -> [< any ] t -> [> snumeric ] t
   val ( /@ ) : [< any ] t -> [< any ] t -> [> sfloat ] t
-  val ( //@ ) : [< any ] t -> [< any ] t -> [> snumber ] t
-  val ( %@ ) : [< any ] t -> [< any ] t -> [> snumber ] t
-  val ( **@ ) : [< any ] t -> [< any ] t -> [> snumber ] t
+  val ( //@ ) : [< any ] t -> [< any ] t -> [> snumeric ] t
+  val ( %@ ) : [< any ] t -> [< any ] t -> [> snumeric ] t
+  val ( **@ ) : [< any ] t -> [< any ] t -> [> snumeric ] t
   val ( @@ ) : [< any ] t -> [< any ] t -> [> any ] t
   val ( &&@ ) : [< any ] t -> [< any ] t -> [> sbool ] t
   val ( ||@ ) : [< any ] t -> [< any ] t -> [> sbool ] t

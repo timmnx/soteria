@@ -47,9 +47,9 @@ struct
     end)
 
     let add_constraint arr v =
-      if Typed.equal v Typed.v_true then ()
+      if Typed.equal v Typed.SBool.v_true then ()
       else (
-        if Typed.equal v Typed.v_false then truncate_to_checkpoint arr;
+        if Typed.equal v Typed.SBool.v_false then truncate_to_checkpoint arr;
         add arr { value = Asrt v; checked = false })
 
     let dirty_variable (t : t) v = add t { value = Dirty v; checked = false }
@@ -64,7 +64,7 @@ struct
       | Nil -> Some true (* The empty constraint is satisfiable *)
       | Cons ({ checked = true; _ }, _) ->
           Some true (* All constraints have been checked to be sat *)
-      | Cons ({ value = Asrt value; _ }, _) when Typed.(equal value v_false) ->
+      | Cons ({ value = Asrt value; _ }, _) when Typed.(equal value SBool.v_false) ->
           Some false
       | _ -> None
 
@@ -252,7 +252,7 @@ struct
   and simplify solver : 'a Typed.t -> 'a Typed.t = as_untyped (simplify' solver)
 
   let add_constraints solver ?(simplified = false) vs =
-    let iter = vs |> Iter.of_list |> Iter.flat_map Typed.split_ands in
+    let iter = vs |> Iter.of_list |> Iter.flat_map Typed.SBool.split_ands in
     iter @@ fun v ->
     let v = if simplified then v else simplify solver v in
     let v, vars = Analysis.add_constraint solver.analysis (Typed.untyped v) in
@@ -286,7 +286,7 @@ struct
       | Svalue.TInt -> (
           let i = Var.to_int v in
           try Some (Var.Hashtbl.find v_eqs v)
-          with Not_found -> Some (Svalue.SInt.int i))
+          with Not_found -> Some (Svalue.SNumeric.int i))
       | _ -> None
     in
     let res = Eval.eval ~eval_var to_check in
@@ -329,7 +329,7 @@ struct
         in
         (* This will put the check in a somewhat-normal form, to increase cache
            hits. *)
-        let to_check = Dynarray.fold_left Typed.and_ Typed.v_true to_check in
+        let to_check = Dynarray.fold_left Typed.and_ Typed.SBool.v_true to_check in
         let to_check =
           Iter.fold Typed.and_ to_check
             (Analysis.encode ~vars:relevant_vars solver.analysis)

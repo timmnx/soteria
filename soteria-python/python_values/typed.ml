@@ -9,10 +9,10 @@ module T = struct
   type zero = [ `Zero ]
   type sint = [ `Nonzero | `Zero ]
   type sfloat = [ `Float ]
-  type snumber = [ `Nonzero | `Zero | `Float ]
+  type snumeric = [ `Nonzero | `Zero | `Float ]
   type sstr = [ `Str ]
-  type others = [ `Others ]
-  type not_yet_implemented = [ `NotYetImplemented ]
+  type sothers = [ `Others ]
+  type snot_yet_implemented = [ `NotYetImplemented ]
 
   type any =
     [ `Bool | `Nonzero | `Zero | `Float | `Str | `Others | `NotYetImplemented ]
@@ -28,8 +28,6 @@ end
 type nonrec +'a t = t
 type nonrec +'a ty = ty
 type sbool = T.sbool
-
-include SBool
 
 let[@inline] get_ty x = x.node.ty
 let[@inline] type_type x = x
@@ -51,12 +49,5 @@ let cast_float x = if is_float x.node.ty then Some x else None
 
 let cast_checked2 x y =
   if equal_ty x.node.ty y.node.ty then Some (x, y, x.node.ty) else None
-
-
-module SBool = struct
-  include SBool
-
-  type t = sbool
-end
 
 module Expr = Expr

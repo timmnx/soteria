@@ -18,17 +18,17 @@ module Error = struct
   type with_trace = t Soteria.Terminal.Call_trace.t
 end
 
-module S_int = struct
+module S_numeric = struct
   include Typed
 
   (* include SBool *)
-  include SInt
+  include SNumeric
 
-  type t = Typed.T.sint Typed.t
+  type t = Typed.T.snumeric Typed.t
   type syn = Symex.Value.Expr.t
 
   let simplify = Symex.simplify
-  let distinct vs = Typed.distinct_seq vs
+  let distinct vs = Typed.SBool.distinct_seq vs
   let fresh () = Symex.nondet Typed.t_int
   let pp = Typed.ppa
   let show x = (Fmt.to_to_string pp) x

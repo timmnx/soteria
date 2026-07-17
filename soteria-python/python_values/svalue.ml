@@ -144,7 +144,7 @@ let rec iter_vars (sv : t) (f : Var.t * ty -> unit) : unit =
       iter_vars c f;
       iter_vars t f;
       iter_vars e f
-  | _ -> failwith "Don't know what to do"
+  | _ -> failwith "Don't know what to do (iter_vars in svalue.ml)"
 
 let pp_full ft t = pp_t_node ft t.node
 
@@ -179,7 +179,7 @@ let rec pp ft t =
       match range with
       | Some (min, max) -> pf ft "%a(V|%d-%d|)" Nop.pp op min max
       | None -> pf ft "%a(%a)" Nop.pp op (list ~sep:comma pp) l)
-  | _ -> failwith "ToDo"
+  | _ -> failwith "ToDo (in Svalue.pp)"
 
 let rec sure_neq (a : t) (b : t) =
   (not (equal_ty a.node.ty b.node.ty))
@@ -192,7 +192,7 @@ let rec sure_neq (a : t) (b : t) =
   (* | Tuple a, Tuple b -> (
       try List.for_all2 sure_neq a b with Invalid_argument _ -> false)
   | Ref _, Ref _ -> failwith "ToDo" *)
-  | Float f, Int i | Int i, Float f -> failwith "Determine what to do"
+  | Float f, Int i | Int i, Float f -> failwith "Determine what to do (in Svalue.sure_neq)"
   | _ -> false (* [None_] and [Null] cases are included here *)
 
 module Hcons = Hc.Make (struct
@@ -210,7 +210,8 @@ module Hcons = Hc.Make (struct
     | Binop (op, l, r) -> Hashtbl.hash (op, l.tag, r.tag, hty)
     | Nop (op, l) -> Hashtbl.hash (op, List.map (fun sv -> sv.tag) l, hty)
     | Ite (c, t, e) -> Hashtbl.hash (c.tag, t.tag, e.tag, hty)
-    | _ -> failwith "Todo"
+    | _ -> Hashtbl.hash (kind, hty)
+    (* | _ -> failwith "Todo (in Hcons)" *)
 end)
 
 let ( <| ) kind ty : t = Hcons.hashcons { kind; ty }
@@ -236,36 +237,22 @@ module SBool = struct
     (* avoid re-alloc and re-hashconsing *)
     if b then v_true else v_false
 
-  let rec and_ v1 v2 =
+  let and_ v1 v2 =
     match (v1.node.kind, v2.node.kind) with
     | _, _ when equal v1 v2 -> v1
     | Bool false, _ | _, Bool false -> v_false
     | Bool true, _ -> v2
     | _, Bool true -> v1
-    | Binop (Eq, l1, r1), Binop (Eq, l2, r2)
-      when (equal l1 l2 && sure_neq r1 r2)
-           || (equal l1 r2 && sure_neq r1 l2)
-           || (equal r1 l2 && sure_neq l1 r2)
-           || (equal r1 r2 && sure_neq l1 l2) ->
-        v_false
     | _ -> mk_commut_binop And v1 v2 <| TBool
 
-  and or_ v1 v2 =
+  let or_ v1 v2 =
     match (v1.node.kind, v2.node.kind) with
     | Bool true, _ | _, Bool true -> v_true
     | Bool false, _ -> v2
     | _, Bool false -> v1
-    | Binop (Lt, l1, r1), Binop (Lt, l2, r2) when equal l1 r2 && equal r1 l2 ->
-        not (sem_eq l1 r1)
-    | Binop (Lt, l1, r1), Binop (Le, l2, r2)
-    | Binop (Le, l1, r1), Binop (Lt, l2, r2)
-      when equal l1 r2 && equal r1 l2 ->
-        v_true
-    | Binop (Or, a, b), _ when equal a v2 || equal b v2 -> v1
-    | _, Binop (Or, a, b) when equal v1 a || equal v1 b -> v2
     | _ -> mk_commut_binop Or v1 v2 <| TBool
 
-  and not sv =
+  let rec not_ sv =
     if equal sv v_true then v_false
     else if equal sv v_false then v_true
     else
@@ -275,66 +262,28 @@ module SBool = struct
       | Binop (Le, v1, v2) -> Binop (Lt, v2, v1) <| TBool
       | Binop (Gt, v1, v2) -> Binop (Ge, v2, v1) <| TBool
       | Binop (Ge, v1, v2) -> Binop (Gt, v2, v1) <| TBool
-      | Binop (Or, v1, v2) -> mk_commut_binop And (not v1) (not v2) <| TBool
-      | Binop (And, v1, v2) -> mk_commut_binop Or (not v1) (not v2) <| TBool
+      | Binop (Or, v1, v2) -> mk_commut_binop And (not_ v1) (not_ v2) <| TBool
+      | Binop (And, v1, v2) -> mk_commut_binop Or (not_ v1) (not_ v2) <| TBool
       | _ -> Unop (Not, sv) <| TBool
 
-  and ite guard if_ else_ =
+  let ite guard if_ else_ =
     match (guard.node.kind, if_.node.kind, else_.node.kind) with
     | Bool true, _, _ -> if_
     | Bool false, _, _ -> else_
     | _, Bool true, Bool false -> guard
-    | _, Bool false, Bool true -> not guard
-    | _, Bool false, _ -> and_ (not guard) else_
+    | _, Bool false, Bool true -> not_ guard
+    | _, Bool false, _ -> and_ (not_ guard) else_
     | _, Bool true, _ -> or_ guard else_
     | _, _, Bool false -> and_ guard if_
-    | _, _, Bool true -> or_ (not guard) if_
+    | _, _, Bool true -> or_ (not_ guard) if_
     | _ when equal if_ else_ -> if_
     | _ -> Ite (guard, if_, else_) <| if_.node.ty
-
-  and sem_eq v1 v2 : t =
-    if equal v1 v2 then v_true
-    else
-      match (v1.node.kind, v2.node.kind) with
-      | _ when equal v1 v2 -> v_true
-      | Bool b1, Bool b2 -> of_bool (b1 = b2)
-      | _ -> mk_commut_binop Eq v1 v2 <| TBool
-
-  let sem_eq_untyped v1 v2 =
-    if equal_ty v1.node.ty v2.node.ty then sem_eq v1 v2 else v_false
 
   let and_lazy v1 v2 =
     match v1.node.kind with Bool false -> v_false | _ -> and_ v1 (v2 ())
 
   let or_lazy v1 v2 =
     match v1.node.kind with Bool true -> v_true | _ -> or_ v1 (v2 ())
-
-  let sem_ne v1 v2 =
-    if equal v1 v2 then v_false
-    else
-      match (v1.node.kind, v2.node.kind) with
-      | Bool b1, Bool b2 -> of_bool (b1 <> b2)
-      | _ -> mk_commut_binop Ne v1 v2 <| TBool
-
-  let gt v1 v2 =
-    match (v1.node.kind, v2.node.kind) with
-    | Bool b1, Bool b2 -> of_bool (b1 > b2)
-    | _ -> Binop (Gt, v1, v2) <| TBool
-
-  let ge v1 v2 =
-    match (v1.node.kind, v2.node.kind) with
-    | Bool b1, Bool b2 -> of_bool (b1 >= b2)
-    | _ -> Binop (Ge, v1, v2) <| TBool
-
-  let lt v1 v2 =
-    match (v1.node.kind, v2.node.kind) with
-    | Bool b1, Bool b2 -> of_bool (b1 < b2)
-    | _ -> Binop (Lt, v1, v2) <| TBool
-
-  let le v1 v2 =
-    match (v1.node.kind, v2.node.kind) with
-    | Bool b1, Bool b2 -> of_bool (b1 <= b2)
-    | _ -> Binop (Le, v1, v2) <| TBool
 
   (* let conj l = List.fold_left and_ v_true l *)
   let conj = function
@@ -363,8 +312,9 @@ module SBool = struct
   let distinct_seq s = distinct (List.of_seq s)
 end
 
-module SInt = struct
-  (** {2 Integers} *)
+module SNumeric = struct
+  (** {2 Integers, Float, Complex} *)
+  (** Integers *)
   let int_z z = Int z <| TInt
 
   let int_float f = int_z (Z.of_float f)
@@ -376,6 +326,33 @@ module SInt = struct
   let nonzero x = if x = 0 then raise (Invalid_argument "nonzero") else int x
   let zero = int_z Z.zero
   let one = int_z Z.one
+
+  (** Float *)
+  let float f = Float f <| TFloat
+
+  (** Helpers *)
+  let as_int (v:t) =
+    match v.node.kind with
+    | Int z -> Some z
+    | Bool b -> Some (if b then Z.one else Z.zero)
+    | _ -> None
+
+  let as_float (v:t) =
+    match v.node.kind with
+    | Float f -> Some f
+    | Int z -> Some (Z.to_float z)
+    | Bool b -> Some (if b then 1. else 0.)
+    | _ -> None
+
+  let is_number (v:t) =
+    match v.node.ty with
+    | TFloat | TInt | TBool -> true
+    | _ -> false
+
+  (* let is_complex v =
+    match v.node.ty with
+    | TComplex -> true
+    | _ -> false *)
 
   let rec add v1 v2 =
     match (v1.node.kind, v2.node.kind) with
@@ -498,10 +475,75 @@ module SInt = struct
     | _ -> sub (-1 |> int) v
 
   (* {2 Equality, comparison, int-bool and int-float conversions} *)
+  module Static = struct
+    let num_eq a b =
+      match (as_int a, as_int b) with
+      | Some x, Some y -> Z.equal x y
+      | _ -> (
+        match (as_float a), (as_float b) with
+        | Some x, Some y -> x = y
+        | _ -> failwith
+              "This case should never happend (in Svalue.SNumeric.Static.num_eq"
+      )
+
+    let num_lt a b =
+      match (as_int a, as_int b) with
+      | Some x, Some y -> Z.lt x y
+      | _ -> (
+        match (as_float a), (as_float b) with
+        | Some x, Some y -> x < y
+        | _ -> failwith
+              "This case should never happend (in Svalue.SNumeric.Static.num_lt"
+      )
+
+    let num_le a b =
+      match (as_int a, as_int b) with
+      | Some x, Some y -> Z.leq x y
+      | _ -> (
+        match (as_float a), (as_float b) with
+        | Some x, Some y -> x <= y
+        | _ -> failwith
+              "This case should never happend (in Svalue.SNumeric.Static.num_le"
+      )
+  end
+
+  let rec sem_eq v1 v2 =
+    match (v1.node.kind, v2.node.kind) with
+    | (Bool _|Int _|Float _ ), (Bool _|Int _|Float _ ) ->
+      SBool.of_bool @@ Static.num_eq v1 v2
+    | _, Binop (Add, v2, v3) when equal v1 v2 -> sem_eq v3 zero
+    | _, Binop (Add, v2, v3) when equal v1 v3 -> sem_eq v2 zero
+    | Binop (Add, v1, v3), _ when equal v1 v2 -> sem_eq v3 zero
+    | Binop (Add, v1, v3), _ when equal v3 v2 -> sem_eq v1 zero
+    | Binop (Add, v1, v2), Binop (Add, v3, v4) when equal v1 v3 ->
+        sem_eq v2 v4
+    | Binop (Add, v1, v2), Binop (Add, v3, v4) when equal v1 v4 ->
+        sem_eq v2 v3
+    | Binop (Add, v1, v2), Binop (Add, v3, v4) when equal v2 v3 ->
+        sem_eq v1 v4
+    | Binop (Add, v1, v2), Binop (Add, v3, v4) when equal v2 v4 ->
+        sem_eq v1 v3
+    | Binop (Add, v1, { node = { kind = Int x; _ }; _ }), Int y
+    | Binop (Add, { node = { kind = Int x; _ }; _ }, v1), Int y
+    | Int y, Binop (Add, v1, { node = { kind = Int x; _ }; _ })
+    | Int y, Binop (Add, { node = { kind = Int x; _ }; _ }, v1) ->
+        sem_eq v1 (int_z @@ Z.sub y x)
+    | Binop (Sub, z, { node = { kind = Int x; _ }; _ }), Int y
+    | Int y, Binop (Sub, z, { node = { kind = Int x; _ }; _ }) ->
+        sem_eq z (int_z @@ Z.add y x)
+    | Int y, Binop (Mul, { node = { kind = Int x; _ }; _ }, v1)
+    | Int y, Binop (Mul, v1, { node = { kind = Int x; _ }; _ })
+    | Binop (Mul, v1, { node = { kind = Int x; _ }; _ }), Int y
+    | Binop (Mul, { node = { kind = Int x; _ }; _ }, v1), Int y ->
+        if Z.equal Z.zero x then SBool.of_bool (Z.equal Z.zero y)
+        else if Z.(equal zero (rem y x)) then sem_eq v1 (int_z Z.(y / x))
+        else SBool.v_false
+    | _ -> mk_commut_binop Eq v1 v2 <| TBool
 
   let rec lt v1 v2 =
     match (v1.node.kind, v2.node.kind) with
-    | Int i1, Int i2 -> SBool.of_bool (Z.lt i1 i2)
+    | (Bool _|Int _|Float _ ), (Bool _|Int _|Float _ ) ->
+      SBool.of_bool @@ Static.num_lt v1 v2
     | _, _ when equal v1 v2 -> SBool.v_false
     | _, Binop (Add, v2, v3) when equal v1 v2 -> lt zero v3
     | _, Binop (Add, v2, v3) when equal v1 v3 -> lt zero v2
@@ -551,7 +593,8 @@ module SInt = struct
 
   and le v1 v2 =
     match (v1.node.kind, v2.node.kind) with
-    | Int i1, Int i2 -> SBool.of_bool (Z.leq i1 i2)
+    | (Bool _|Int _|Float _ ), (Bool _|Int _|Float _ ) ->
+      SBool.of_bool @@ Static.num_le v1 v2
     | _, _ when equal v1 v2 -> SBool.v_true
     | _, Binop (Add, v2, v3) when equal v1 v2 -> le zero v3
     | _, Binop (Add, v2, v3) when equal v1 v3 -> le zero v2
@@ -598,50 +641,6 @@ module SInt = struct
     | Ite (b, t, e), Int _ -> SBool.ite b (le t v2) (le e v2)
     | _ -> Binop (Le, v1, v2) <| TBool
 
-  let ge v1 v2 = le v2 v1
-  let gt v1 v2 = lt v2 v1
-
-  let rec sem_eq v1 v2 =
-    if equal v1 v2 then SBool.v_true
-    else
-      match (v1.node.kind, v2.node.kind) with
-      | Int z1, Int z2 -> SBool.of_bool (Z.equal z1 z2)
-      | _, Binop (Add, v2, v3) when equal v1 v2 -> sem_eq v3 zero
-      | _, Binop (Add, v2, v3) when equal v1 v3 -> sem_eq v2 zero
-      | Binop (Add, v1, v3), _ when equal v1 v2 -> sem_eq v3 zero
-      | Binop (Add, v1, v3), _ when equal v3 v2 -> sem_eq v1 zero
-      | Binop (Add, v1, v2), Binop (Add, v3, v4) when equal v1 v3 ->
-          sem_eq v2 v4
-      | Binop (Add, v1, v2), Binop (Add, v3, v4) when equal v1 v4 ->
-          sem_eq v2 v3
-      | Binop (Add, v1, v2), Binop (Add, v3, v4) when equal v2 v3 ->
-          sem_eq v1 v4
-      | Binop (Add, v1, v2), Binop (Add, v3, v4) when equal v2 v4 ->
-          sem_eq v1 v3
-      | Binop (Add, v1, { node = { kind = Int x; _ }; _ }), Int y
-      | Binop (Add, { node = { kind = Int x; _ }; _ }, v1), Int y
-      | Int y, Binop (Add, v1, { node = { kind = Int x; _ }; _ })
-      | Int y, Binop (Add, { node = { kind = Int x; _ }; _ }, v1) ->
-          sem_eq v1 (int_z @@ Z.sub y x)
-      | Binop (Sub, z, { node = { kind = Int x; _ }; _ }), Int y
-      | Int y, Binop (Sub, z, { node = { kind = Int x; _ }; _ }) ->
-          sem_eq z (int_z @@ Z.add y x)
-      | Int y, Binop (Mul, { node = { kind = Int x; _ }; _ }, v1)
-      | Int y, Binop (Mul, v1, { node = { kind = Int x; _ }; _ })
-      | Binop (Mul, v1, { node = { kind = Int x; _ }; _ }), Int y
-      | Binop (Mul, { node = { kind = Int x; _ }; _ }, v1), Int y ->
-          if Z.equal Z.zero x then SBool.of_bool (Z.equal Z.zero y)
-          else if Z.(equal zero (rem y x)) then sem_eq v1 (int_z Z.(y / x))
-          else SBool.v_false
-      | _ -> mk_commut_binop Eq v1 v2 <| TBool
-
-  let sem_ne v1 v2 =
-    if equal v1 v2 then SBool.v_false
-    else
-      match (v1.node.kind, v2.node.kind) with
-      | Int z1, Int z2 -> SBool.of_bool (Z.equal z1 z2 |> not)
-      | _ -> sem_eq v1 v2 |> SBool.not
-
   (* {Conversion} *)
   let of_bool b =
     if equal SBool.v_true b then one
@@ -654,19 +653,12 @@ module SInt = struct
     | _ -> Binop (Ne, v, zero) <| TBool
 
   let of_float (v : t) =
-    match v.node.kind with Float f -> int_float f | _ -> failwith "ToDo"
+    match v.node.kind with Float f -> int_float f | _ -> failwith "ToDo (in Svalue.of_float)"
 
   let to_float (v : t) =
     match v.node.kind with
     | Int i -> Float (Z.to_float i) <| TFloat
-    | _ -> failwith "ToDo"
-end
-
-module SFloat = struct
-  (** {2 Integers + Float + Str} *)
-  let float f = Float f <| TFloat
-
-  (* ToDo *)
+    | _ -> failwith "ToDo (in Svalue.to_float)"
 end
 
 module SStr = struct
@@ -675,6 +667,10 @@ module SStr = struct
     let get_str (v : t) : string option =
       match v.node.kind with Str s -> Some s | _ -> None
   (* ToDo *)
+  let sem_eq v1 v2 =
+    match v1.node.kind, v2.node.kind with
+    | Str s1, Str s2 -> SBool.of_bool (s1 = s2)
+    | _ -> mk_commut_binop Eq v1 v2 <| TBool
 end
 
 module SOthers = struct
@@ -694,78 +690,52 @@ module SOthers = struct
     match v.node.kind with Builtin s -> Some s | _ -> None
 end
 
+let to_bool = SBool.to_bool
+let of_bool = SBool.of_bool
+let rec not sv =
+  if equal sv SBool.v_true then SBool.v_false
+  else if equal sv SBool.v_false then SBool.v_true
+  else
+    match sv.node.kind with
+    | Unop (Not, sv) -> sv
+    | Binop (Lt, v1, v2) -> Binop (Le, v2, v1) <| TBool
+    | Binop (Le, v1, v2) -> Binop (Lt, v2, v1) <| TBool
+    | Binop (Gt, v1, v2) -> Binop (Ge, v2, v1) <| TBool
+    | Binop (Ge, v1, v2) -> Binop (Gt, v2, v1) <| TBool
+    | Binop (Or, v1, v2) -> mk_commut_binop And (not v1) (not v2) <| TBool
+    | Binop (And, v1, v2) -> mk_commut_binop Or (not v1) (not v2) <| TBool
+    | _ -> Unop (Not, sv) <| TBool
+
 (** {2 Unop functions} *)
-let neg (v : t) : t =
-  match v.node.ty with
-  | TBool -> SInt.neg @@ SInt.of_bool v
-  | TInt -> SInt.neg v
-  | _ -> failwith "Negative only implemented fot TInt (ToDo)"
+let neg (v : t) : t = failwith "'neg' not implemented yet (ToDo in Svalue.neg)"
 
-let not (v : t) : t =
-  match v.node.ty with
-  | TBool -> SBool.not v
-  | TInt -> SBool.not @@ SInt.to_bool v
-  | _ -> failwith "Not only implemented fot TBool (ToDo)"
+let not_ (v : t) : t = failwith "'not_' not implemented yet (ToDo in Svalue.not_)"
 
-let invert (v : t) : t =
-  match v.node.ty with
-  | TInt -> SInt.invert v
-  | _ -> failwith "Negative only implemented fot TInt (ToDo)"
+let invert (v : t) : t = failwith "'invert' not implemented yet (ToDo in Svalue.invert)"
 
-let cast_to_bool (v : t) : t =
-  match v.node.ty with
-  | TBool -> v
-  | TInt -> SInt.to_bool v
-  | _ -> failwith "Negative only implemented fot TInt (ToDo)"
+let to_bool_ (v : t) : t = failwith "'to_bool_' not implemented yet (ToDo in Svalue.to_bool_)"
 
 (** {2 Binop functions} *)
-let add (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with
-  | TInt, TInt -> SInt.add v1 v2
-  | _ -> failwith "Add only implemented fot TInt (ToDo)"
+let add (v1 : t) (v2 : t) : t = failwith "Add not implemented yet (ToDo)"
 
-let sub (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with
-  | TInt, TInt -> SInt.sub v1 v2
-  | _ -> failwith "Sub only implemented fot TInt (ToDo)"
+let sub (v1 : t) (v2 : t) : t = failwith "Sub not implemented yet (ToDo)"
 
-let mul (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with
-  | TInt, TInt -> SInt.mul v1 v2
-  | _ -> failwith "Mul only implemented fot TInt (ToDo)"
+let mul (v1 : t) (v2 : t) : t = failwith "Mul not implemented yet (ToDo)"
 
-let div (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with _ -> failwith "ToDo"
+let div (v1 : t) (v2 : t) : t = failwith "Div not implemented yet (ToDo)"
 
-let floor_div (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with
-  | TInt, TInt -> SInt.floor_div v1 v2
-  | _ -> failwith "Floor_div only implemented fot TInt (ToDo)"
+let floor_div (v1 : t) (v2 : t) : t = failwith "Floor_div not implemented yet (ToDo)"
 
-let mod_ (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with
-  | TInt, TInt -> SInt.mod_ v1 v2
-  | _ -> failwith "Mod only implemented fot TInt (ToDo)"
+let mod_ (v1 : t) (v2 : t) : t = failwith "Mod not implemented yet (ToDo)"
 
-let pow (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with
-  | TInt, TInt -> SInt.pow v1 v2
-  | _ -> failwith "Pow only implemented fot TInt (ToDo)"
+let pow (v1 : t) (v2 : t) : t = failwith "Pow not implemented yet (ToDo)"
 
-let mat_mul (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with
-  | _ -> failwith "Matmul not implemented yet (ToDo)"
+let mat_mul (v1 : t) (v2 : t) : t = failwith "Matmul not implemented yet (ToDo)"
 
 (* Bool *)
-let and_ (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with
-  | TBool, TBool -> SBool.and_ v1 v2
-  | _ -> failwith "Pow only implemented fot TBool (ToDo)"
+let and_ (v1 : t) (v2 : t) : t = failwith "And not implemented yet (ToDo)"
 
-let or_ (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with
-  | TBool, TBool -> SBool.or_ v1 v2
-  | _ -> failwith "Pow only implemented fot TBool (ToDo)"
+let or_ (v1 : t) (v2 : t) : t = failwith "Or not implemented yet (ToDo)"
 (* Bit *)
 
 let bit_and (v1 : t) (v2 : t) : t =
@@ -790,48 +760,46 @@ let bit_rshift (v1 : t) (v2 : t) : t =
 
 (* Comp *)
 let sem_eq (v1 : t) (v2 : t) : t =
+  if equal v1 v2 then SBool.v_true
+  else
   match (v1.node.ty, v2.node.ty) with
-  | TBool, TBool -> SBool.sem_eq v1 v2
-  | TInt, TInt -> SInt.sem_eq v1 v2
+  | _, _ when SNumeric.(is_number v1 && is_number v2) -> SNumeric.sem_eq v1 v2
+  | TStr, TStr -> SStr.sem_eq v1 v2
   | _ -> failwith "Eq only implemented fot TBool and TInt (ToDo)"
 
+
+let sem_eq_untyped v1 v2 =
+  if equal_ty v1.node.ty v2.node.ty then sem_eq v1 v2 else SBool.v_false
+
 let sem_ne (v1 : t) (v2 : t) : t =
+  if equal v1 v2 then SBool.v_false
+  else
   match (v1.node.ty, v2.node.ty) with
-  | TBool, TBool -> SBool.sem_ne v1 v2
-  | TInt, TInt -> SInt.sem_ne v1 v2
-  | _ -> failwith "Ne only implemented fot TBool and TInt (ToDo)"
+  | _ -> failwith "Ne not implemented yet (ToDo in Svalue.sem_ne)"
 
 let lt (v1 : t) (v2 : t) : t =
+  if equal v1 v2 then SBool.v_false else
   match (v1.node.ty, v2.node.ty) with
-  | TBool, TBool -> SBool.lt v1 v2
-  | TInt, TInt -> SInt.lt v1 v2
-  | _ -> failwith "Lt only implemented fot TBool and TInt (ToDo)"
+  | _ -> failwith "Lt not implemented yet (ToDo in Svalue.lt)"
 
 let leq (v1 : t) (v2 : t) : t =
+  if equal v1 v2 then SBool.v_true else
   match (v1.node.ty, v2.node.ty) with
-  | TBool, TBool -> SBool.le v1 v2
-  | TInt, TInt -> SInt.le v1 v2
-  | _ -> failwith "Le only implemented fot TBool and TInt (ToDo)"
+  | _ -> failwith "Le not implemented yet (ToDo in Svalue.leq)"
 
 let gt (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with
-  | TBool, TBool -> SBool.gt v1 v2
-  | TInt, TInt -> SInt.gt v1 v2
-  | _ -> failwith "Gt only implemented fot TBool and TInt (ToDo)"
+  failwith "Gt not implemented yet (ToDo in Svalue.gt)"
 
 let geq (v1 : t) (v2 : t) : t =
-  match (v1.node.ty, v2.node.ty) with
-  | TBool, TBool -> SBool.ge v1 v2
-  | TInt, TInt -> SInt.ge v1 v2
-  | _ -> failwith "Ge only implemented fot TBool and TInt (ToDo)"
+  failwith "Ge not implemented yet (ToDo in Svalue.geq)"
 
 (** {2 General constructors} *)
 
 let mk_unop : Unop.t -> t -> t = function
   | Negative -> neg
-  | Not -> not
+  | Not -> not_
   | Invert -> invert
-  | To_bool -> cast_to_bool
+  | To_bool -> to_bool_
 
 let mk_binop : Binop.t -> t -> t -> t = function
   (* Math *)
@@ -861,7 +829,7 @@ let mk_binop : Binop.t -> t -> t -> t = function
   | Ge -> geq
 
 let mk_nop : Nop.t -> t list -> t = function Distinct -> SBool.distinct
-let not v = mk_unop Unop.Not v
+(* let not v = mk_unop Unop.Not v *)
 
 (** {2 Infix operators} *)
 
@@ -869,11 +837,11 @@ let are_addable (x:t) (y:t) =
   match (x.node.ty, y.node.ty) with
   | TInt, TInt -> Some (x, y)
   | TInt, TFloat -> None
-  | _ -> failwith "ToDo"
+  | _ -> failwith "ToDo (in Svalue.are_addable)"
 
 module Infix = struct
-  let int_z = SInt.int_z
-  let int = SInt.int
+  let int_z = SNumeric.int_z
+  let int = SNumeric.int
 
   (* Math *)
   let ( +@ ) = mk_binop Add
@@ -912,8 +880,8 @@ end
 
 module Syntax = struct
   module Sym_int_syntax = struct
-    let mk_nonzero = SInt.nonzero
-    let[@inline] zero () = SInt.zero
-    let[@inline] one () = SInt.one
+    let mk_nonzero = SNumeric.nonzero
+    let[@inline] zero () = SNumeric.zero
+    let[@inline] one () = SNumeric.one
   end
 end

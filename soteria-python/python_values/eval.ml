@@ -38,7 +38,7 @@ let eval_unop : Unop.t -> t -> t = function
   | Negative -> neg
   | Not -> not
   | Invert -> invert
-  | To_bool -> cast_to_bool
+  | To_bool -> to_bool_
 
 let rec eval (x : t) : t =
   match x.node.kind with

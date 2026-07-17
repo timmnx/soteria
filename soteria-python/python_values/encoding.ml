@@ -23,15 +23,16 @@ let t_ptr, mk_ptr, get_loc, get_ofs, init_commands =
 let sort_of_ty : ty -> sexp = function
   | TBool -> t_bool
   | TInt -> t_int
-  | _ -> failwith "Ignore (ToDo)"
+(* | TFloat -> failwith "ToDo (in Encoding.ml)" *)
+  | _ -> failwith "ToDo (in Encoding.ml)"
 
 let memo_encode_value_tbl : sexp Hashtbl.Hint.t = Hashtbl.Hint.create 1023
 
 let smt_of_unop : Svalue.Unop.t -> sexp -> sexp = function
   | Not -> bool_not
   | Negative -> fun x -> a_neg $ x
-  | Invert -> failwith "Ignore (ToDo)"
-  | To_bool -> failwith "Ignore (ToDo)"
+  | Invert -> failwith "ToDo (in Encoding.ml)"
+  | To_bool -> failwith "ToDo (in Encoding.ml)"
 
 let smt_of_binop : Svalue.Binop.t -> sexp -> sexp -> sexp = function
   | Eq -> eq
@@ -48,13 +49,13 @@ let smt_of_binop : Svalue.Binop.t -> sexp -> sexp -> sexp = function
   | Div -> fun x y -> a_div $$ [ x; y ]
   | Floor_div -> fun x y -> a_rem $$ [ x; y ]
   | Mod -> fun x y -> a_mod $$ [ x; y ]
-  | Pow -> failwith "Does not exist yet (ToDo)"
-  | Mat_mul -> failwith "Does not exist yet (ToDo)"
-  | BitAnd -> failwith "Does not exist yet (ToDo)"
-  | BitOr -> failwith "Does not exist yet (ToDo)"
-  | BitXor -> failwith "Does not exist yet (ToDo)"
-  | BitLshift -> failwith "Does not exist yet (ToDo)"
-  | BitRshift -> failwith "Does not exist yet (ToDo)"
+  | Pow -> failwith "Does not exist yet (ToDo in Encoding.ml)"
+  | Mat_mul -> failwith "Does not exist yet (ToDo in Encoding.ml)"
+  | BitAnd -> failwith "Does not exist yet (ToDo in Encoding.ml)"
+  | BitOr -> failwith "Does not exist yet (ToDo in Encoding.ml)"
+  | BitXor -> failwith "Does not exist yet (ToDo in Encoding.ml)"
+  | BitLshift -> failwith "Does not exist yet (ToDo in Encoding.ml)"
+  | BitRshift -> failwith "Does not exist yet (ToDo in Encoding.ml)"
 
 let rec encode_value (v : Svalue.t) =
   match v.node.kind with
@@ -73,7 +74,7 @@ let rec encode_value (v : Svalue.t) =
   | Nop (Distinct, vs) ->
       let vs = List.map encode_value_memo vs in
       distinct vs
-  | _ -> failwith "Does not exist yet (ToDo)"
+  | _ -> failwith "Does not exist yet (ToDo in Encoding.ml)"
 
 and encode_value_memo v =
   match Hashtbl.Hint.find_opt memo_encode_value_tbl v.Hc.tag with
