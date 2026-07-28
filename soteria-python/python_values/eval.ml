@@ -56,7 +56,8 @@ let rec eval (x : t) : t =
       if v1 == nv1 && v2 == nv2 then x else eval_binop binop nv1 nv2
   | Nop (nop, l) -> (
       let l, changed = List.map_changed eval l in
-      if Stdlib.not changed then x else match nop with Distinct -> SBool.distinct l)
+      if Stdlib.not changed then x
+      else match nop with Distinct -> SBool.distinct l)
   | Ite (guard, then_, else_) ->
       let guard = eval guard in
       if equal guard SBool.v_true then eval then_

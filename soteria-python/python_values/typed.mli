@@ -151,21 +151,40 @@ end
 
 module SStr : sig
   val str : string -> [> sstr ] t
+
+  (* val is_static_str : [< any] t -> bool *)
   val get_str : [< any ] t -> string option
 end
 
 module SOthers : sig
+  (* None_ *)
   val none_ : [> sothers ] t
-  val null : [> sothers ] t
-  val mk_ref : int -> [> sothers ] t
-  val mk_builtin : string -> [> sothers ] t
-  val not_implemented : [> sothers ] t
-  val ellipsis : [> sothers ] t
-  val null : [> sothers ] t
   val is_none_ : [< any ] t -> bool
+
+  (* Null *)
+  val null : [> sothers ] t
   val is_null : [< any ] t -> bool
+
+  (* Ref *)
+  val mk_ref : int -> [> sothers ] t
+  val is_ref : [< any ] t -> bool
   val get_ref : [< any ] t -> int option
+
+  (* Builtin *)
+  val mk_builtin : string -> [> sothers ] t
+  val is_builtin : [< any ] t -> bool
   val get_builtin : [< any ] t -> string option
+
+  (* Bound *)
+  val mk_bound : [< any ] t * [< any ] t -> [> sothers ] t
+  val is_bound : [< any ] t -> bool
+  val get_bound : [< any ] t -> ([> any ] t * [> any ] t) option
+
+  (* Not_implemented *)
+  val not_implemented : [> sothers ] t
+
+  (* Ellipsis *)
+  val ellipsis : [> sothers ] t
 end
 
 val to_bool : 'a t -> bool option
@@ -173,18 +192,18 @@ val of_bool : bool -> sbool t
 
 (** All operations *)
 val neg : [< any ] t -> [> any ] t
+
 val not_ : [< any ] t -> [> sbool ] t
 val invert : [< any ] t -> [> any ] t
 val to_bool_ : [< any ] t -> [> sbool ] t
-
 val not : [< any ] t -> [> sbool ] t
 
 (* val to_bool : [< any ] t -> [> sbool ] t *)
 val add : [< any ] t -> [< any ] t -> [> snumeric ] t
 val sub : [< any ] t -> [< any ] t -> [> snumeric ] t
 val mul : [< any ] t -> [< any ] t -> [> snumeric ] t
-val div : [< any ] t -> [< any ] t -> [> sfloat ] t
-val floor_div : [< any ] t -> [< any ] t -> [> snumeric ] t
+val div : [< any ] t -> [< nonzero ] t -> [> sfloat ] t
+val floor_div : [< any ] t -> [< nonzero ] t -> [> snumeric ] t
 val mod_ : [< any ] t -> [< any ] t -> [> snumeric ] t
 val pow : [< any ] t -> [< any ] t -> [> snumeric ] t
 val mat_mul : [< any ] t -> [< any ] t -> [> any ] t
@@ -210,8 +229,8 @@ module Infix : sig
   val ( ~! ) : [< any ] t -> [> sbool ] t
   val ( ~~ ) : [< any ] t -> [> snumeric ] t
   val ( *@ ) : [< any ] t -> [< any ] t -> [> snumeric ] t
-  val ( /@ ) : [< any ] t -> [< any ] t -> [> sfloat ] t
-  val ( //@ ) : [< any ] t -> [< any ] t -> [> snumeric ] t
+  val ( /@ ) : [< any ] t -> [< nonzero ] t -> [> sfloat ] t
+  val ( //@ ) : [< any ] t -> [< nonzero ] t -> [> snumeric ] t
   val ( %@ ) : [< any ] t -> [< any ] t -> [> snumeric ] t
   val ( **@ ) : [< any ] t -> [< any ] t -> [> snumeric ] t
   val ( @@ ) : [< any ] t -> [< any ] t -> [> any ] t

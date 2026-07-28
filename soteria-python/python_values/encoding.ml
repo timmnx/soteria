@@ -23,7 +23,7 @@ let t_ptr, mk_ptr, get_loc, get_ofs, init_commands =
 let sort_of_ty : ty -> sexp = function
   | TBool -> t_bool
   | TInt -> t_int
-(* | TFloat -> failwith "ToDo (in Encoding.ml)" *)
+  (* | TFloat -> failwith "ToDo (in Encoding.ml)" *)
   | _ -> failwith "ToDo (in Encoding.ml)"
 
 let memo_encode_value_tbl : sexp Hashtbl.Hint.t = Hashtbl.Hint.create 1023
@@ -85,4 +85,7 @@ and encode_value_memo v =
       k
 
 let encode_value (v : Svalue.t) =
-  Svalue.SBool.split_ands v |> Iter.map encode_value_memo |> Iter.to_list |> bool_ands
+  Svalue.SBool.split_ands v
+  |> Iter.map encode_value_memo
+  |> Iter.to_list
+  |> bool_ands

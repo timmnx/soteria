@@ -669,8 +669,10 @@ end
 module SStr = struct
   (** {2 Integers + Float + Str} *)
   let str s = Str s <| TStr
-    let get_str (v : t) : string option =
-      match v.node.kind with Str s -> Some s | _ -> None
+  (* let is_static_str (v : t) : bool =
+    match v.node.kind with Str _ -> true | _ -> false *)
+  let get_str (v : t) : string option =
+    match v.node.kind with Str s -> Some s | _ -> None
   (* ToDo *)
   let sem_eq v1 v2 =
     match v1.node.kind, v2.node.kind with
@@ -679,20 +681,42 @@ module SStr = struct
 end
 
 module SOthers = struct
+  (* None_ *)
   let none_ = None_ <| TOthers
-  let null = Null <| TOthers
-  let mk_ref i = Ref i <| TOthers
-  let mk_builtin s = Builtin s <| TOthers
-  let not_implemented = Not_implemented <| TOthers
-  let ellipsis = Ellipsis <| TOthers
-
   let is_none_ (v : t) : bool = equal none_ v
+
+  (* Null *)
+  let null = Null <| TOthers
   let is_null (v : t) : bool = equal null v
 
+  (* Ref *)
+  let mk_ref i = Ref i <| TOthers
+  let is_ref (v : t) : bool =
+    match v.node.kind with Ref _ -> true | _ -> false
   let get_ref (v : t) : int option =
     match v.node.kind with Ref i -> Some i | _ -> None
+
+  (* Builtin *)
+  let mk_builtin s = Builtin s <| TOthers
+  let is_builtin (v : t) : bool =
+    match v.node.kind with Builtin _ -> true | _ -> false
   let get_builtin (v : t) : string option =
     match v.node.kind with Builtin s -> Some s | _ -> None
+
+  (* Bound *)
+  let mk_bound (a, b) = Bound (a,b) <| TOthers
+  let is_bound (v : t) : bool =
+    match v.node.kind with Bound _ -> true | _ -> false
+  let get_bound (v : t) : (t * t) option =
+    match v.node.kind with Bound (a,b) -> Some (a,b) | _ -> None
+
+  (* Not_implemented *)
+  let not_implemented = Not_implemented <| TOthers
+
+  (* Ellipsis *)
+  let ellipsis = Ellipsis <| TOthers
+
+
 end
 
 let to_bool = SBool.to_bool
@@ -718,16 +742,40 @@ let not_ (v : t) : t = failwith "'not_' not implemented yet (ToDo in Svalue.not_
 
 let invert (v : t) : t = failwith "'invert' not implemented yet (ToDo in Svalue.invert)"
 
-let to_bool_ (v : t) : t = failwith "'to_bool_' not implemented yet (ToDo in Svalue.to_bool_)"
+let var_to_bool_ (v : t) : t =
+  match v.node.ty with
+  | TBool -> v
+  | TInt | TFloat -> SNumeric.to_bool v
+  | _ -> failwith "ToDo Svalue.var_to_bool_"
+
+let to_bool_ (v : t) : t =
+  match v.node.kind with
+  | Var _ -> var_to_bool_ v
+  | None_ -> SBool.v_false
+  | Bool _ -> v
+  | Int _ | Float _ -> SNumeric.to_bool v
+  | Complex _ -> failwith "ToDo Svalue.to_bool_.Complex"
+  | Str _ -> failwith "ToDo Svalue.to_bool_.Str"
+  | Bytes _ -> failwith "ToDo Svalue.to_bool_.Bytes"
+  | Tuple _ -> failwith "ToDo Svalue.to_bool_.Tuple"
+  | Range _ -> failwith "ToDo Svalue.to_bool_.Range"
+  | Ref _ -> failwith "ToDo Svalue.to_bool_.Ref"
+  | _ -> SBool.v_true
 
 (** {2 Binop functions} *)
-let add (v1 : t) (v2 : t) : t = failwith "Add not implemented yet (ToDo)"
-
+let add (v1 : t) (v2 : t) : t =
+  match (v1.node.kind, v2.node.kind) with
+  | Int i1, Int i2 -> SNumeric.int_z (Z.div i1 i2)
+  | _ -> Binop (Add, v1, v2) <| TInt
 let sub (v1 : t) (v2 : t) : t = failwith "Sub not implemented yet (ToDo)"
 
 let mul (v1 : t) (v2 : t) : t = failwith "Mul not implemented yet (ToDo)"
 
-let div (v1 : t) (v2 : t) : t = failwith "Div not implemented yet (ToDo)"
+let div (v1 : t) (v2 : t) : t =
+  match (v1.node.kind, v2.node.kind) with
+  | _, _ when equal v2 SNumeric.one -> v1
+  | Int i1, Int i2 -> SNumeric.int_z (Z.div i1 i2)
+  | _ -> Binop (Div, v1, v2) <| TInt
 
 let floor_div (v1 : t) (v2 : t) : t = failwith "Floor_div not implemented yet (ToDo)"
 
@@ -738,7 +786,13 @@ let pow (v1 : t) (v2 : t) : t = failwith "Pow not implemented yet (ToDo)"
 let mat_mul (v1 : t) (v2 : t) : t = failwith "Matmul not implemented yet (ToDo)"
 
 (* Bool *)
-let and_ (v1 : t) (v2 : t) : t = failwith "And not implemented yet (ToDo)"
+let and_ (v1 : t) (v2 : t) : t =
+  match (v1.node.kind, v2.node.kind) with
+  | _, _ when equal v1 v2 -> v1
+  | Bool false, _ | _, Bool false -> SBool.v_false
+  | Bool true, _ -> v2
+  | _, Bool true -> v1
+  | _ -> mk_commut_binop And v1 v2 <| TBool
 
 let or_ (v1 : t) (v2 : t) : t = failwith "Or not implemented yet (ToDo)"
 (* Bit *)
@@ -785,11 +839,13 @@ let sem_ne (v1 : t) (v2 : t) : t =
 let lt (v1 : t) (v2 : t) : t =
   if equal v1 v2 then SBool.v_false else
   match (v1.node.ty, v2.node.ty) with
+  | _ when SNumeric.is_number v1 && SNumeric.is_number v2 -> SNumeric.lt v1 v2
   | _ -> failwith "Lt not implemented yet (ToDo in Svalue.lt)"
 
 let leq (v1 : t) (v2 : t) : t =
   if equal v1 v2 then SBool.v_true else
   match (v1.node.ty, v2.node.ty) with
+  | _ when SNumeric.is_number v1 && SNumeric.is_number v2 -> SNumeric.le v1 v2
   | _ -> failwith "Le not implemented yet (ToDo in Svalue.leq)"
 
 let gt (v1 : t) (v2 : t) : t =

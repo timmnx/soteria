@@ -64,7 +64,8 @@ struct
       | Nil -> Some true (* The empty constraint is satisfiable *)
       | Cons ({ checked = true; _ }, _) ->
           Some true (* All constraints have been checked to be sat *)
-      | Cons ({ value = Asrt value; _ }, _) when Typed.(equal value SBool.v_false) ->
+      | Cons ({ value = Asrt value; _ }, _)
+        when Typed.(equal value SBool.v_false) ->
           Some false
       | _ -> None
 
@@ -329,7 +330,9 @@ struct
         in
         (* This will put the check in a somewhat-normal form, to increase cache
            hits. *)
-        let to_check = Dynarray.fold_left Typed.and_ Typed.SBool.v_true to_check in
+        let to_check =
+          Dynarray.fold_left Typed.and_ Typed.SBool.v_true to_check
+        in
         let to_check =
           Iter.fold Typed.and_ to_check
             (Analysis.encode ~vars:relevant_vars solver.analysis)

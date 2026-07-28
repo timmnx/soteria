@@ -79,6 +79,7 @@ let exception_tree =
 
 let builtin_functions =
   [
+    "Soteria_randint";
     "print";
     "len";
     "repr";

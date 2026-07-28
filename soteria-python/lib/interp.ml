@@ -1,8 +1,8 @@
 include Aux
-open Soteria.Soteria_std.Syntaxes.FunctionWrap
 open Symex
 open Symex.Syntax
 open S_val.Infix
+open Soteria.Soteria_std.Syntaxes.FunctionWrap
 
 (* Python AST *)
 open Boot
@@ -10,14 +10,12 @@ open Py_value
 module Phir = Pytecode.Phir
 module Ast = Pytecode.Ast
 
-(* module InterpM (State : State_intf.S) = struct module StateM = State.SM
-   module SSM = Soteria.Sym_states.State_monad.Make (StateM) (Store) open SSM
-
-   type 'a t = ('a, Error.with_trace, State.syn list) SSM.Result.t end *)
-
 type err = string
 
 let raise_py _ a b = Result.error (a ^ b)
+
+let raise_exc (e : value) = Result.error (S_val.show e)
+
 
 type frame_outcome = Returned of value | Yielded of value * frame
 
@@ -42,7 +40,7 @@ module rec Dictionaries : sig
   val dict_find :
     state ->
     (value * value) list ->
-    'b ->
+    value ->
     (value option * state, err, 'a) Result.t
 
   val check_hashable : state -> value -> (unit * state, err, 'a) Result.t
@@ -53,44 +51,59 @@ module rec Dictionaries : sig
   val dict_del : state -> int -> value -> (bool * state, err, 'a) Result.t
   val dget : state -> int -> value -> (value option * state, err, 'a) Result.t
 end = struct
-  let dict_find _ = failwith "ToDo (in Lib.Interp.Dictionaries.dict_find)"
+  let rec dict_find st pairs key : (value option * state, err, 'a) Result.t =
+    match pairs with
+    | [] -> Result.ok (None, st)
+    | (k, v) :: rest -> (
+        let** v_eq, st = Equality.py_eq st k key in
+        match S_val.to_bool v_eq with
+        | Some eq ->
+            if eq then Result.ok (Some v, st) else dict_find st rest key
+        | None ->
+            failwith "Don't know what to do in Interp.Dictionaries.dict_find")
 
   let check_hashable st key : (unit * state, err, 'a) Result.t =
-    match deref (st: state) (key: value) with
+    match deref (st : state) (key : value) with
     | Some (List _) -> raise_py st "TypeError" "unhashable type: 'list'"
     | Some (Dict _) -> raise_py st "TypeError" "unhashable type: 'dict'"
     | Some (Set _) -> raise_py st "TypeError" "unhashable type: 'set'"
-    | Some (Bytearray _) -> raise_py st "TypeError" "unhashable type: 'bytearray'"
-    | Some (Instance { cls; _ }) -> (
+    | Some (Bytearray _) ->
+        raise_py st "TypeError" "unhashable type: 'bytearray'"
+    | Some (Instance { cls; _ }) ->
         (* ref: 3.3.1 __hash__ — a class that overrides __eq__ without defining
            __hash__ (or sets __hash__ = None) has unhashable instances *)
-          raise_py st "TypeError" "unhashable type: ToDo in Interp.Dictionnaries.check_hashable"
-        (* let unhashable st =
-            (* (Printf.sprintf "unhashable type: '%s'" (type_name st key)) *)
-        in
-        let** h, st = ClassesAndAttributes.type_lookup st cls "__hash__" in
-        match h with
-        | Some None_ -> unhashable st
-        | Some _ -> Ok ((), st)
-        | None -> (
-            let* eq, st = type_lookup st cls "__eq__" in
-            match eq with Some _ -> unhashable st | None -> Ok ((), st)) *)
-    )
+        raise_py st "TypeError"
+          "unhashable type: ToDo in Interp.Dictionnaries.check_hashable"
+        (* let unhashable st = (* (Printf.sprintf "unhashable type: '%s'"
+           (type_name st key)) *) in let** h, st =
+           ClassesAndAttributes.type_lookup st cls "__hash__" in match h with |
+           Some None_ -> unhashable st | Some _ -> Ok ((), st) | None -> ( let*
+           eq, st = type_lookup st cls "__eq__" in match eq with Some _ ->
+           unhashable st | None -> Ok ((), st)) *)
     | _ -> Result.ok ((), st)
 
   let dict_set st a key v : (unit * state, err, 'a) Result.t =
     let** (), st = check_hashable st key in
     let rec go st acc = function
       | [] -> Result.ok (List.rev_append acc [ (key, v) ], st)
-      | (k, v0) :: rest ->
-          let** eq, st = Equality.py_eq st k key in
-          if eq then Result.ok (List.rev_append acc ((k, v) :: rest), st)
-          else go st ((k, v0) :: acc) rest
+      | (k, v0) :: rest -> (
+          let** v_eq, st = Equality.py_eq st k key in
+          match S_val.to_bool v_eq with
+          | Some eq ->
+              if eq then Result.ok (List.rev_append acc ((k, v) :: rest), st)
+              else go st ((k, v0) :: acc) rest
+          | None ->
+              failwith
+                "Don't know what to do in Interp.Dictionaries.dict_set.go")
     in
     let** pairs, st = go st [] (dict_pairs st a) in
     Result.ok ((), heap_set st a (Dict pairs))
+
   let dict_del _ = failwith "ToDo (in Lib.Interp.Dictionaries.dict_del)"
-  let dget _ = failwith "ToDo (in Lib.Interp.Dictionaries.dget)"
+
+  let dget (st : state) (a : int) (key : value) :
+      (value option * state, err, 'a) Result.t =
+    dict_find st (dict_pairs st a) key
 end
 
 (* ---------- equality ----------------------------------------------- *)
@@ -98,7 +111,9 @@ and Equality : sig
   val cmp_unwrap :
     state -> value -> string list -> (value * state, err, 'a) Result.t
 
-  val py_eq : state -> value -> value -> (bool * state, err, 'a) Result.t
+  val eq_dunders : string list
+  val order_dunders : string list
+  val py_eq : state -> value -> value -> (value * state, err, 'a) Result.t
 end = struct
   let cmp_unwrap st v (dunders : string list) :
       (value * state, 'err, 'a) Symex.Result.t =
@@ -118,46 +133,95 @@ end = struct
   let eq_dunders = [ "__eq__"; "__ne__" ]
   let order_dunders = [ "__lt__"; "__gt__"; "__le__"; "__ge__" ]
 
-  let py_eq st a b : (bool * state, err, 'a) Result.t =
+  let py_eq st a b : (value * state, err, 'a) Result.t =
     let** a, st = cmp_unwrap st a eq_dunders in
     let** b, st = cmp_unwrap st b eq_dunders in
-    match S_val.SBool.to_bool (a ==@ b) with
-    | Some b -> Result.ok (b, st)
-    | None -> Result.error "Not a boolean (in Interp.Equality.py_eq)"
-    (* match (a, b) with
-    | _ when is_number a && is_number b -> Result.ok (num_eq a b, st)
-    | _ when (is_complex a && is_numeric b) || (is_numeric a && is_complex b) ->
-        let ar, ai = Option.get (as_complex a)
-        and br, bi = Option.get (as_complex b) in
-        Result.ok (ar = br && ai = bi, st)
-    (* | Str x, Str y -> Result.ok (x = y, st) *)
-    | _, _ when as_bytes st a <> None && as_bytes st b <> None ->
-        (* ref: 3.2.5 — bytes and bytearray compare across their types *)
-        Result.ok (as_bytes st a = as_bytes st b, st)
-    (* | None_, None_ -> Result.ok (true, st) *)
-    (* | Tuple xs, Tuple ys -> seq_eq st xs ys *)
-    (* | Ref x, Ref y when x = y -> Result.ok (true, st) *)
-    (* | Ref x, Ref y -> (
-        match (heap_get st x, heap_get st y) with
-        | List xs, List ys -> seq_eq st xs ys
-        | Dict xs, Dict ys -> dict_eq st xs ys
-        | (Set xs | Frozenset xs), (Set ys | Frozenset ys) -> set_eq st xs ys
-        | Instance _, _ | _, Instance _ -> instance_eq st a b
-        | _ -> Result.ok (false, st))
-    | (Ref _, _ | _, Ref _) when is_instance_value st a || is_instance_value st b
-      ->
-        instance_eq st a b *)
-    (* singletons and other immediates compare by identity: None/Ellipsis/
-       NotImplemented/builtins are equal only to themselves *)
-    | _ -> Result.ok (a = b, st) *)
+    Result.ok (a ==@ b, st)
+  (* match S_val.SBool.to_bool (a ==@ b) with | Some b -> Result.ok (b, st) |
+     None -> Result.error "Not a boolean (in Interp.Equality.py_eq)" *)
+  (* match (a, b) with | _ when is_number a && is_number b -> Result.ok (num_eq
+     a b, st) | _ when (is_complex a && is_numeric b) || (is_numeric a &&
+     is_complex b) -> let ar, ai = Option.get (as_complex a) and br, bi =
+     Option.get (as_complex b) in Result.ok (ar = br && ai = bi, st) (* | Str x,
+     Str y -> Result.ok (x = y, st) *) | _, _ when as_bytes st a <> None &&
+     as_bytes st b <> None -> (* ref: 3.2.5 — bytes and bytearray compare across
+     their types *) Result.ok (as_bytes st a = as_bytes st b, st) (* | None_,
+     None_ -> Result.ok (true, st) *) (* | Tuple xs, Tuple ys -> seq_eq st xs ys
+     *) (* | Ref x, Ref y when x = y -> Result.ok (true, st) *) (* | Ref x, Ref
+     y -> ( match (heap_get st x, heap_get st y) with | List xs, List ys ->
+     seq_eq st xs ys | Dict xs, Dict ys -> dict_eq st xs ys | (Set xs |
+     Frozenset xs), (Set ys | Frozenset ys) -> set_eq st xs ys | Instance _, _ |
+     _, Instance _ -> instance_eq st a b | _ -> Result.ok (false, st)) | (Ref _,
+     _ | _, Ref _) when is_instance_value st a || is_instance_value st b ->
+     instance_eq st a b *) (* singletons and other immediates compare by
+     identity: None/Ellipsis/ NotImplemented/builtins are equal only to
+     themselves *) | _ -> Result.ok (a = b, st) *)
 end
 (* ---------- ordering ----------------------------------------------- *)
 
-(* TODO *)
+and Ordering : sig
+  val py_compare_value :
+    Phir.cmpop -> value -> value -> state -> (value * state, err, 'a) Result.t
+end = struct
+  let py_lt a b st : (value * state, 'a, 'b) Result.t =
+    let** a, st = Equality.cmp_unwrap st a Equality.order_dunders in
+    let** b, st = Equality.cmp_unwrap st b Equality.order_dunders in
+    Result.ok (a <@ b, st)
+
+  let py_le a b st : (value * state, 'a, 'b) Result.t =
+    let** a, st = Equality.cmp_unwrap st a Equality.order_dunders in
+    let** b, st = Equality.cmp_unwrap st b Equality.order_dunders in
+    Result.ok (a <=@ b, st)
+
+  let py_compare (op : Phir.cmpop) a b st : (value * state, 'a, 'b) Result.t =
+    match op with
+    | Eq -> Equality.py_eq st a b
+    | Ne ->
+        (* ref: 3.3.1 — x != y calls x.__ne__(y) (then the reflected
+           y.__ne__(x)); the default object.__ne__ delegates to __eq__ and
+           inverts it. *)
+        if is_instance_value st a || is_instance_value st b then
+          failwith "ToDo: Interp.Ordering.py_compare (if branch)"
+          (* let* prio = reflected_priority a b "__ne__" in let first, second =
+             if prio then (b, a) else (a, b) in let* r = try_richcmp first
+             "__ne__" [ second ] in match r with | Some v -> py_truth v | None
+             -> ( let* r = try_richcmp second "__ne__" [ first ] in match r with
+             | Some v -> py_truth v | None -> let* e = py_eq a b in return (not
+             e)) *)
+        else
+          let** e, st = Equality.py_eq st a b in
+          Result.ok (S_val.not e, st)
+    | Lt -> py_lt a b st
+    | Gt -> py_lt b a st
+    | Le -> py_le a b st
+    | Ge -> py_le b a st
+
+  let py_compare_value (op : Phir.cmpop) a b st :
+      (value * state, err, 'a) Result.t =
+    let dunders =
+      match op with
+      | Eq | Ne -> Equality.eq_dunders
+      | _ -> Equality.order_dunders
+    in
+    let** a, st = Equality.cmp_unwrap st a dunders in
+    let** b, st = Equality.cmp_unwrap st b dunders in
+    if is_instance_value st a || is_instance_value st b then
+      failwith "ToDo: Interp.Ordering.py_compare_value (if branch)"
+      (* match op with | Eq -> instance_eq_value a b | Ne -> instance_ne_value a
+         b | Lt -> instance_order_value a b "__lt__" "__gt__" "<" | Gt ->
+         instance_order_value a b "__gt__" "__lt__" ">" | Le ->
+         instance_order_value a b "__le__" "__ge__" "<=" | Ge ->
+         instance_order_value a b "__ge__" "__le__" ">=" *)
+    else py_compare op a b st
+end
 
 (* ---------- truthiness and length ---------------------------------- *)
-
-(* TODO *)
+and TruthinessAndLength : sig
+  val py_truth : value -> state -> (value * state, err, 'a) Result.t
+end = struct
+  let py_truth (v : value) st : (value * state, err, 'a) Result.t =
+    Result.ok (S_val.to_bool_ v, st)
+end
 
 (* ---------- repr and str ------------------------------------------- *)
 
@@ -168,22 +232,198 @@ end
 (* TODO *)
 
 (* ---------- classes and attributes --------------------------------- *)
-
 and ClassesAndAttributes : sig
   val type_lookup :
     state -> int -> string -> (value option * state, err, 'a) Result.t
+
+  val getattr_value :
+    state -> value -> string -> (value * state, err, 'a) Result.t
+
+  val bind_class_value : value -> inst:value -> cls_addr:int -> state -> (value * state, err, 'a) Result.t
 end = struct
-  let type_lookup _ =
-    failwith "ToDo (in Lib.Interp.ClassesAndAttributes.type_lookup)"
+  let type_lookup st cls_addr name =
+    let rec go st = function
+      | [] -> Result.ok (None, st)
+      | c :: rest -> (
+          let** f, st = Dictionaries.dget st (cls_of st c).cdict (S_val.SStr.str name) in
+          match f with Some v -> Result.ok (Some v, st) | None -> go st rest)
+    in
+    go st (cls_of st cls_addr).mro
+
+  let attribute_error =
+   fun st v name ->
+    raise_py st "AttributeError"
+      (Printf.sprintf "'%s' object has no attribute '%s'" "(type_name st v)"
+         name)
+
+  let getattr_value st (v : value) name =
+    (* let bound_builtin tag = if List.mem name (builtin_method_names tag) then
+       Result.ok (S_val.SOthers.mk_bound (S_val.SOthers.mk_builtin (tag ^ "." ^
+       name), v), st) else attribute_error st v name in *)
+    failwith (S_val.show v)
+  (* match v with | Str _ -> bound_builtin "str" | Bytes _ -> bound_builtin
+     "bytes" | Int z -> ( (* ref: 3.2.4.1 — an int's numeric-tower attributes *)
+     match name with | "real" | "numerator" -> Ok (v, st) | "imag" -> Ok (Int
+     Z.zero, st) | "denominator" -> Ok (Int Z.one, st) | _ -> ignore z;
+     bound_builtin "int") | Bool _ -> ( match name with | "real" | "numerator"
+     -> Ok (Int (if v = Bool true then Z.one else Z.zero), st) | "imag" -> Ok
+     (Int Z.zero, st) | "denominator" -> Ok (Int Z.one, st) | _ -> bound_builtin
+     "int") | Float f -> ( (* ref: 3.2.4.2 — a float's real/imag *) match name
+     with | "real" -> Ok (Float f, st) | "imag" -> Ok (Float 0., st) | _ ->
+     bound_builtin "float") | Complex (re, im) -> ( (* ref: 3.2.4.3 Complex —
+     read-only real/imag, conjugate() *) match name with | "real" -> Ok (Float
+     re, st) | "imag" -> Ok (Float im, st) | _ -> bound_builtin "complex") |
+     Slice (start, stop, step) -> ( (* ref: 3.2.13 Internal types — slice
+     objects expose start/stop/step *) match name with | "start" -> Ok (start,
+     st) | "stop" -> Ok (stop, st) | "step" -> Ok (step, st) | _ ->
+     attribute_error st v name) | Tuple _ -> bound_builtin "tuple" | Ref a -> (
+     match heap_get st a with | List _ -> bound_builtin "list" | Dict _ ->
+     bound_builtin "dict" | Set _ -> bound_builtin "set" | Frozenset _ ->
+     bound_builtin "frozenset" | Bytearray _ -> bound_builtin "bytearray" |
+     Instance { cls; dict; _ } -> instance_getattr st v cls dict name | Class _
+     -> class_getattr st a name | Func fn -> ( match name with | "__name__" ->
+     Ok (Str fn.code.name, st) | "__qualname__" -> Ok (Str fn.code.qualname, st)
+     | "__doc__" -> Ok ( (match fn.code.docstring with | Some s -> Str s | None
+     -> None_), st ) | "__defaults__" -> Ok ((if fn.defaults = [] then None_
+     else Tuple fn.defaults), st) | _ -> ( let* own, st = dget st fn.fdict (Str
+     name) in match own with | Some v -> Ok (v, st) | None -> (* ref: 8.7/8.10 —
+     __annotations__ defaults to {}, and __type_params__ to () *) if name =
+     "__annotations__" then Ok (alloc st (Dict [])) else if name =
+     "__type_params__" then Ok (Tuple [], st) else attribute_error st v name)) |
+     Gen _ -> if List.mem name gen_methods then Ok (Bound (Builtin ("generator."
+     ^ name), v), st) else attribute_error st v name | Super { cls; self } ->
+     super_getattr st ~cls ~self name | Property ({ fget; _ } as p) -> ( match
+     name with | "setter" -> Ok (Bound (Builtin "property.setter", v), st) |
+     "getter" -> Ok (Bound (Builtin "property.getter", v), st) | "fget" -> Ok
+     (fget, st) | "fset" -> Ok (Option.value p.fset ~default:None_, st) | _ ->
+     attribute_error st v name) (* ref: 3.3.5 — a GenericAlias exposes
+     __origin__/__args__ and otherwise delegates attribute access to its origin
+     class *) | Generic_alias { ga_origin; ga_args } -> ( match name with |
+     "__origin__" -> Ok (ga_origin, st) | "__args__" -> Ok (Tuple ga_args, st) |
+     _ -> getattr_value st ga_origin name) (* ref: 6.7 — a UnionType exposes its
+     members as __args__ *) | Union_type members -> ( match name with |
+     "__args__" -> Ok (Tuple members, st) | _ -> attribute_error st v name) (*
+     ref: 7.14 — __value__ lazily evaluates the alias's value expression *) |
+     Type_alias { ta_name; ta_value; ta_type_params } -> ( match name with |
+     "__name__" -> Ok (Str ta_name, st) | "__value__" -> call st ta_value [] []
+     | "__type_params__" -> Ok (ta_type_params, st) | _ -> attribute_error st v
+     name) (* ref: 8.10 — a TypeVar exposes __name__/__bound__/__constraints__;
+     bound and constraints are evaluated lazily on access *) | Typevar {
+     tv_name; tv_bound; tv_constraints } -> ( match name with | "__name__" -> Ok
+     (Str tv_name, st) | "__bound__" -> ( match tv_bound with | None_ -> Ok
+     (None_, st) | f -> call st f [] []) | "__constraints__" -> ( match
+     tv_constraints with | None_ -> Ok (Tuple [], st) | f -> call st f [] []) |
+     _ -> attribute_error st v name) | _ -> attribute_error st v name) | Bound
+     (func, self) -> ( (* ref: 3.2.8 Instance methods — a bound method exposes
+     __self__/__func__ and otherwise delegates to the underlying function object
+     (so m.__name__, m.tag, ... work). *) match name with | "__self__" -> Ok
+     (self, st) | "__func__" -> Ok (func, st) | _ -> getattr_value st func name)
+     | _ -> attribute_error st v name *)
+
+     let bind_class_value found ~inst ~cls_addr st =
+       match deref st found with
+       | Some (Func _) -> failwith "ToDo Interp.ClassesAndAttributes.bind_class_value -> Some (Func _)"
+       | Some (Classmethod m) -> failwith "ToDo Interp.ClassesAndAttributes.bind_class_value -> Some (Classmethod m)"
+       | Some (Staticmethod m) -> Result.ok (m, st)
+       | _ -> (
+           match found with
+           | _ when S_val.SOthers.is_builtin found -> failwith "ToDo Interp.ClassesAndAttributes.bind_class_value -> _"
+           | _ -> Result.ok (found, st))
 end
 
 (* ---------- isinstance / issubclass -------------------------------- *)
 
-(* TODO *)
+and IsinstanceIssubclass : sig
+  val isinstance_value : value -> value -> state -> (bool * state, err, 'a) Result.t
+end = struct
+  let rec isinstance_value (v : value) (cls_v : value) st =
+    failwith "ToDo Interp.IsinstanceIssubclass.isinstance_value"
+end
 
 (* ---------- class creation ----------------------------------------- *)
 
-(* TODO *)
+and ClassCreation : sig
+  val instantiate : int -> value list -> (string * value) list -> state -> (value * state, err, 'a) Result.t
+end = struct
+  let builtin_base_tag cls_addr st =
+    Result.ok
+      (List.find_map
+         (fun a ->
+           match (cls_of st a).builtin with Some "object" -> None | t -> t)
+         (cls_of st cls_addr).mro, st)
+  let is_native_tag = function
+    | "dict" | "list" | "set" | "frozenset" | "int" | "float" | "str" | "tuple"
+    | "bytes" ->
+        true
+    | _ -> false
+
+
+  let instantiate_plain cls_addr args kwargs st =
+    (* ref: 3.3.1 __new__ / __init__ — __new__ creates the instance (implicitly a
+       staticmethod, receiving the class); __init__ then initialises it, but only
+       when __new__ returned an instance of cls, and __init__ must return None. *)
+    let** new_m, st = ClassesAndAttributes.type_lookup st cls_addr "__new__" in
+    let** inst, st =
+      match new_m with
+      | Some f ->
+          let f = match deref st f with Some (Staticmethod m) -> m | _ -> f in
+          Call.call st f (S_val.SOthers.mk_ref cls_addr :: args) kwargs
+      | None ->
+          let d, st = alloc st (Dict []) in
+          alloc st (Instance { cls = cls_addr; dict = addr d; native = S_val.SOthers.none_ })
+          |> Result.ok
+    in
+    let** is_inst, st = IsinstanceIssubclass.isinstance_value inst (S_val.SOthers.mk_ref cls_addr) st in
+    if not is_inst then Result.ok (inst, st)
+    else
+      let** init, st = ClassesAndAttributes.type_lookup st cls_addr "__init__" in
+      match init with
+      | Some f -> (
+          let** bound, st = ClassesAndAttributes.bind_class_value f ~inst ~cls_addr st in
+          let** rv, st = Call.call st bound args kwargs in
+          match rv with
+          | _ when S_val.SOthers.is_none_ rv -> Result.ok (inst, st)
+          | _ ->
+              raise_py st "TypeError"
+                (Printf.sprintf "__init__() should return None, not '%s'"
+                   "(type_name st rv)"))
+      | None -> Result.ok (inst, st)
+
+  let instantiate cls_addr args kwargs st =
+    let** tag_opt, st = builtin_base_tag cls_addr st in
+    match tag_opt with
+    | Some tag when is_native_tag tag -> (
+        let** init, st = ClassesAndAttributes.type_lookup st cls_addr "__init__" in
+        let user_init =
+          match Option.map (deref st) init with
+          | Some (Some (Func _)) -> init
+          | _ -> None
+        in
+        let mutable_container =
+          match tag with "list" | "dict" | "set" -> true | _ -> false
+        in
+        let** payload, st =
+          if mutable_container && user_init <> None then
+            BuiltinTypeConstructors.builtin_class_call tag [] [] st
+          else BuiltinTypeConstructors.builtin_class_call tag args kwargs st
+        in
+        let d, st = alloc st (Dict []) in
+        let inst, st =
+          alloc st (Instance { cls = cls_addr; dict = addr d; native = payload })
+        in
+        match user_init with
+        | Some f -> (
+            let** bound, st = ClassesAndAttributes.bind_class_value f ~inst ~cls_addr st in
+            let** rv, st = Call.call st bound args kwargs in
+            match rv with
+            | _ when S_val.SOthers.is_none_ rv -> Result.ok (inst, st)
+            | _ ->
+                raise_py st "TypeError"
+                  (Printf.sprintf "__init__() should return None, not '%s'"
+                     "(type_name st rv)"))
+        | None -> Result.ok (inst, st))
+    | _ -> instantiate_plain cls_addr args kwargs st
+end
 
 (* ---------- generators --------------------------------------------- *)
 
@@ -202,19 +442,21 @@ and Operators : sig
     state ->
     (value * state, err, 'a) Result.t
 
-  val unary :
-    Phir.unop -> value -> state -> (value * state, err, 'a) Result.t
+  val unary : Phir.unop -> value -> state -> (value * state, err, 'a) Result.t
 end = struct
-  let are_addable (v1 : value) (v2 : value) :
-      (value * value, err, 'a) Result.t =
+  let are_addable (v1 : value) (v2 : value) : (value * value, err, 'a) Result.t
+      =
     match S_val.are_addable v1 v2 with
     | Some (v1', v2') -> Result.ok (v1', v2')
     | None -> Result.error "Type error in add"
+  (* let are_divisable (v1 : value) (v2 : value) : (value * value, err, 'a)
+     Result.t = match S_val.are_divisable v1 v2 with | Some (v1', v2') ->
+     Result.ok (v1', v2') | None -> Result.error "Type error in add" *)
 
-  let cast_to_bool v =
-    match S_val.cast_checked v S_val.t_bool with
+  let cast_to_bool v = S_val.to_bool_ v |> Result.ok
+    (* match S_val.cast_checked v S_val.t_bool with
     | Some v -> Result.ok v
-    | None -> Result.error "Type error"
+    | None -> Result.error "Type error here" *)
 
   let binary (op : Phir.binop) ~inplace (a : value) (b : value) st :
       (S_val.t * state, err, 'a) Result.t =
@@ -233,7 +475,11 @@ end = struct
       | Pow -> failwith "ToDo: a ^@ b"
       | Rshift -> failwith "ToDo: a >>@ b"
       | Sub -> failwith "ToDo: a -@ b"
-      | Div -> failwith "ToDo: a /@ b"
+      | Div ->
+          let** v1, v2 = are_addable a b in
+          let v2 = S_val.cast_int v2 |> Option.get in
+          let++ v2 = S_val.check_nonzero v2 in
+          a /@ v2
       | Xor -> failwith "ToDo: a ^@ b"
     in
     Result.ok (v, st)
@@ -261,48 +507,55 @@ end
 and Variables : sig
   val store_var :
     state -> frame -> Phir.var -> value -> (frame * state, err, 'a) Result.t
+
+  val load_var : state -> frame -> Phir.var -> (value * state, err, 'a) Result.t
 end = struct
   (* ref: 4.2.2 Resolution of names — search the namespace chain in order (e.g.
-   local/enclosing, then global, then builtins), raising NameError if absent. *)
-  (* let name_chain_lookup st (f : frame) chain s : value r =
+     local/enclosing, then global, then builtins), raising NameError if
+     absent. *)
+  let name_chain_lookup st (f : frame) chain s :
+      (value * state, err, 'a) Result.t =
     let rec go st = function
       | [] ->
           raise_py st "NameError" (Printf.sprintf "name '%s' is not defined" s)
       | d :: rest -> (
-          let* found, st = dget st d (Str s) in
-          match found with Some v -> Ok (v, st) | None -> go st rest)
+          let** found, st = Dictionaries.dget st d (S_val.SStr.str s) in
+          match found with Some v -> Result.ok (v, st) | None -> go st rest)
     in
-    go st (chain f) *)
+    go st (chain f)
 
-  (* ref: 4.2 Naming and binding — read a variable. A local (Fast) slot, a closure
-   cell (Deref, a free/cell variable), or a Name/Global resolved through the
-   namespace chain (4.2.2); an unset local raises UnboundLocalError (4.2.1). *)
-  (* let load_var st (f : frame) (v : Phir.var) : value r =
+  (* ref: 4.2 Naming and binding — read a variable. A local (Fast) slot, a
+     closure cell (Deref, a free/cell variable), or a Name/Global resolved
+     through the namespace chain (4.2.2); an unset local raises
+     UnboundLocalError (4.2.1). *)
+  let load_var st (f : frame) (v : Phir.var) : (value * state, err, 'a) Result.t
+      =
     match v with
     | Fast i -> (
         match Int_map.find_opt i f.slots with
-        | Some v -> Ok (v, st)
+        | Some v -> Result.ok (v, st)
         | None ->
             raise_py st "UnboundLocalError"
               (Printf.sprintf
-                "cannot access local variable '%s' where it is not associated \
+                 "cannot access local variable '%s' where it is not associated \
                   with a value"
-                (fst f.code.localsplus.(i))))
+                 (fst f.code.localsplus.(i))))
     | Deref i -> (
         match Int_map.find_opt i f.slots with
-        | Some (Ref ca) -> (
+        | Some ref_ca when None <> S_val.SOthers.get_ref ref_ca -> (
+            let ca = S_val.SOthers.get_ref ref_ca |> Option.get in
             match heap_get st ca with
-            | Cell (Some v) -> Ok (v, st)
+            | Cell (Some v) -> Result.ok (v, st)
             | Cell None ->
                 raise_py st "NameError"
                   (Printf.sprintf
-                    "free variable '%s' referenced before assignment"
-                    (fst f.code.localsplus.(i)))
+                     "free variable '%s' referenced before assignment"
+                     (fst f.code.localsplus.(i)))
             | _ -> raise_py st "RuntimeError" "deref of non-cell")
         | _ -> raise_py st "RuntimeError" "deref of unbound slot")
     | Name s ->
         name_chain_lookup st f (fun f -> [ f.ns; f.globals; st.builtins ]) s
-    | Global s -> name_chain_lookup st f (fun f -> [ f.globals; st.builtins ]) s *)
+    | Global s -> name_chain_lookup st f (fun f -> [ f.globals; st.builtins ]) s
 
   (* ref: 4.2.1 Binding of names / 7.2 Assignment statements — bind a variable:
      write a local slot, a closure cell, or a namespace (ns/globals) entry. *)
@@ -374,13 +627,18 @@ end = struct
     | Bool b -> S_val.SBool.of_bool b |> Result.ok
     | Int i -> S_val.SNumeric.int_z i |> Result.ok
     | Float f -> S_val.SNumeric.float f |> Result.ok
-    | Complex { re; im } -> failwith "ToDo: Complex (in Interp.OperandEvaluation.const_value)"
+    | Complex { re; im } ->
+        failwith "ToDo: Complex (in Interp.OperandEvaluation.const_value)"
     | Str _ -> failwith "ToDo: Str (in Interp.OperandEvaluation.const_value)"
-    | Bytes _ -> failwith "ToDo: Bytes (in Interp.OperandEvaluation.const_value)"
-    | Tuple _ -> failwith "ToDo: Tuple (in Interp.OperandEvaluation.const_value)"
-    | Frozenset _ -> failwith "ToDo: Frozenset (in Interp.OperandEvaluation.const_value)"
+    | Bytes _ ->
+        failwith "ToDo: Bytes (in Interp.OperandEvaluation.const_value)"
+    | Tuple _ ->
+        failwith "ToDo: Tuple (in Interp.OperandEvaluation.const_value)"
+    | Frozenset _ ->
+        failwith "ToDo: Frozenset (in Interp.OperandEvaluation.const_value)"
     | Code _ -> failwith "ToDo: Code (in Interp.OperandEvaluation.const_value)"
-    | Ellipsis -> failwith "ToDo: Ellipsis (in Interp.OperandEvaluation.const_value)"
+    | Ellipsis ->
+        failwith "ToDo: Ellipsis (in Interp.OperandEvaluation.const_value)"
 
   let eval_operands st (f : frame) (ops : Phir.value list) :
       ((value list * frame) * state, err, 'a) Result.t =
@@ -403,10 +661,8 @@ end = struct
               go st stacked (v :: acc) more
           | Code c -> failwith "ToDo: go st stacked (Code_obj c :: acc) more"
           | Var v ->
-              failwith
-                {|let* x, st = load_var st f v in
-              go st stacked (x :: acc) more|}
-          )
+              let** x, st = Variables.load_var st f v in
+              go st stacked (x :: acc) more)
     in
     let** vals, st = go st (List.rev popped) [] ops in
     Result.ok ((vals, f), st)
@@ -414,37 +670,43 @@ end
 (* ---------- calls ---------------------------------------------------- *)
 
 and Call : sig
-  val call : state -> value -> value list -> (string * value) list -> (value * state, 'err, 'a) Result.t
+  val call :
+    state ->
+    value ->
+    value list ->
+    (string * value) list ->
+    (value * state, err, 'a) Result.t
 end = struct
-  let call st (callee : value) (args : value list) kwargs : value r =
+  let rec call st (callee : value) (args : value list) kwargs :
+      (value * state, 'err, 'a) Result.t =
     match callee with
-    | Builtin name -> call_builtin st name args kwargs
-    | Bound (g, self) -> call st g (self :: args) kwargs
-    | Ref a -> (
-        match heap_get st a with
-        | Func fn -> call_func st fn args kwargs
-        | Class { builtin = Some tag; _ } -> builtin_class_call st tag args kwargs
-        (* ref: 3.3.3 — calling a class invokes its metaclass's __call__; the
-           default (type.__call__) instantiates. A user metaclass __call__
-           overrides instantiation. *)
-        | Class { meta = Some meta; _ } -> (
-            let* mcall, st = type_lookup st meta "__call__" in
-            match mcall with
-            | Some (Builtin "type.__call__") | None ->
-                instantiate st a args kwargs
-            | Some f ->
-                call st
-                  (bind_class_value st f ~inst:(Ref a) ~cls_addr:meta)
-                  args kwargs)
-        | Class _ -> instantiate st a args kwargs
-        | Instance _ -> (
-            let* m, st = find_dunder st callee "__call__" in
-            match m with
-            | Some f -> call st f args kwargs
-            | None -> not_callable st callee)
-        | _ -> not_callable st callee)
-    | _ -> not_callable st callee
+    | _ when None <> S_val.SOthers.get_builtin callee ->
+        let name = S_val.SOthers.get_builtin callee |> Option.get in
+        FrameExecution.call_builtin st name args kwargs
+    | _ when S_val.SOthers.is_ref callee ->
+      let a = S_val.SOthers.get_ref callee |> Option.get in(
+          match heap_get st a with
+          | Func _ -> failwith "ToDo Interp.Call.call -> case Ref -> case Func"
+          | Class { builtin = Some tag; _ } -> failwith "ToDo Interp.Call.call -> case Ref -> case Class {tag}"
+          | Class { meta = Some meta; _ } -> failwith "ToDo Interp.Call.call -> case Ref -> case Class {meta}"
+          | Class _ -> ClassCreation.instantiate a args kwargs st
+          | Instance _ -> failwith "ToDo Interp.Call.call -> case Ref -> case Instance"
+          | _ -> failwith "ToDo Interp.Call.call -> case Ref -> not callable")
 
+    (* | Bound (g, self) -> call st g (self :: args) kwargs | Ref a -> ( match
+       heap_get st a with | Func fn -> call_func st fn args kwargs | Class {
+       builtin = Some tag; _ } -> builtin_class_call st tag args kwargs (* ref:
+       3.3.3 — calling a class invokes its metaclass's __call__; the default
+       (type.__call__) instantiates. A user metaclass __call__ overrides
+       instantiation. *) | Class { meta = Some meta; _ } -> ( let* mcall, st =
+       type_lookup st meta "__call__" in match mcall with | Some (Builtin
+       "type.__call__") | None -> instantiate st a args kwargs | Some f -> call
+       st (bind_class_value st f ~inst:(Ref a) ~cls_addr:meta) args kwargs) |
+       Class _ -> instantiate st a args kwargs | Instance _ -> ( let* m, st =
+       find_dunder st callee "__call__" in match m with | Some f -> call st f
+       args kwargs | None -> not_callable st callee) | _ -> not_callable st
+       callee) *)
+    | _ -> failwith "ToDo in Interp.Call.call"
 end
 
 (* ---------- frame execution ----------------------------------------- *)
@@ -452,9 +714,29 @@ and FrameExecution : sig
   val exec_instr :
     state -> frame -> Phir.instr -> (istep * state, err, 'a) Result.t
 
-  val run_frame :
-    state -> frame -> (frame_outcome * state, err, 'a) Result.t
+  val run_frame : state -> frame -> (frame_outcome * state, err, 'a) Result.t
+
+  val call_builtin :
+    state ->
+    string ->
+    value list ->
+    (string * value) list ->
+    (value * state, err, 'a) Result.t
 end = struct
+  let exception_instance (v : value) st =
+    match deref st v with
+    | Some (Class _) -> Call.call st v [] []
+    | Some (Instance _) -> Result.ok (v, st)
+    | _ -> raise_py st "TypeError" "exceptions must derive from BaseException"
+
+  let set_exc_chain excv ~cause ~suppress st : (unit * state, 'a, 'b) Result.t =
+    failwith "ToDo Interp.FrameExecution.set_exc_chain"
+    (* let ctx = if st.cur_exc = excv then None_ else st.cur_exc in
+    let* () = set_exc_attr excv "__context__" ctx in
+    let* () = set_exc_attr excv "__cause__" cause in
+    set_exc_attr excv "__suppress_context__" (Bool suppress) *)
+
+
   let exec_instr st (f : frame) (ins : Phir.instr) :
       (istep * state, err, 'a) Result.t =
     let op1 st f v =
@@ -471,19 +753,99 @@ end = struct
         ignore f;
         Result.ok (Fin (Returned v), st)
     | Call { f = fv; self; args } -> (
-            let** (vals, f), st =
-              OperandEvaluation.eval_operands st f (fv :: self :: Array.to_list args)
+        let** (vals, f), st =
+          OperandEvaluation.eval_operands st f (fv :: self :: Array.to_list args)
+        in
+        match vals with
+        | callee :: selfv :: argv ->
+            let argv =
+              if S_val.SOthers.is_null selfv then argv else selfv :: argv
             in
-            match vals with
-            | callee :: selfv :: argv ->
-                let argv =
-                  if S_val.SOthers.is_null selfv then
-                    argv
-                  else selfv :: argv in
-                let** v, st = call st callee argv [] in
-                Ok (Next (push f v), st)
-            | _ -> assert false)
-    | _ -> failwith ("ToDo in Interp.FrameExecution.exec_instr for "^ Py_value.strinf_of_intr ins)
+            let** v, st = Call.call st callee argv [] in
+            Result.ok (Next (push f v), st)
+        | _ -> assert false)
+    | Pop_top v ->
+        let** (_, f), st = op1 st f v in
+        Result.ok (Next f, st)
+    | Load_attr { obj; name; meth } ->
+        let** (obj, f), st = op1 st f obj in
+        let** v, st = ClassesAndAttributes.getattr_value st obj name in
+        let f = push f v in
+        Result.ok (Next (if meth then push f S_val.SOthers.null else f), st)
+    | Push v ->
+        let** (v, f), st = op1 st f v in
+        Result.ok (Next (push f v), st)
+    | Unary (op, v) ->
+        let** (v, f), st = op1 st f v in
+        let** r, st = Operators.unary op v st in
+        Result.ok (Next (push f r), st)
+    | Binary_op { op; inplace; l; r } -> (
+        let** (vals, f), st = OperandEvaluation.eval_operands st f [ l; r ] in
+        match vals with
+        | [ a; b ] ->
+            let** v, st = Operators.binary op ~inplace a b st in
+            Result.ok (Next (push f v), st)
+        | _ -> assert false)
+    | Compare { op; coerce_bool; l; r } -> (
+        (* ref: 6.10.1 — keep the raw comparison result unless the bytecode asks
+           for bool coercion (boolean context / chained comparison). *)
+        let** (vals, f), st = OperandEvaluation.eval_operands st f [ l; r ] in
+        match vals with
+        | [ a; b ] ->
+            let** v, st = Ordering.py_compare_value op a b st in
+            let** v, st =
+              if coerce_bool then TruthinessAndLength.py_truth v st
+              else Result.ok (v, st)
+            in
+            Result.ok (Next (push f v), st)
+        | _ -> assert false)
+    | Load_assertion_error ->
+        Result.ok (Next (push f (S_val.SOthers.mk_ref (builtin_class_addr st "AssertionError"))), st)
+    | Raise { exc; cause } -> (
+        let** (vals, f), st =
+          OperandEvaluation.eval_operands st f (Option.to_list exc @ Option.to_list cause)
+        in
+        ignore f;
+        match (exc, vals) with
+        | None, _ ->
+            if S_val.SOthers.is_none_ st.cur_exc then
+              raise_py st "RuntimeError" "No active exception to reraise"
+            else raise_exc st.cur_exc
+        | Some _, [ v ] ->
+            (* ref: 7.8 — implicit chaining: the active exception (if any) becomes
+               the new exception's __context__ *)
+            let** excv, st = exception_instance v st in
+            let** (), st = set_exc_chain excv ~cause:S_val.SOthers.none_ ~suppress:false st in
+            raise_exc excv
+        | Some _, [ v; c ] ->
+            (* ref: 7.8 — `from` sets __cause__ (None is allowed) and suppresses
+               the context display *)
+            let** excv, st = exception_instance v st in
+            let** cv, st = if S_val.SOthers.is_none_ c then Result.ok (S_val.SOthers.none_, st) else exception_instance c st in
+            let** (), st = set_exc_chain excv ~cause:cv ~suppress:true st in
+            raise_exc excv
+        | _ -> assert false)
+    | Jump t -> Result.ok (Goto (f, t), st)
+    | Cond_jump { cond; v; target } ->
+        let** (v, f), st = op1 st f v in
+        let** b, st =
+          match cond with
+          | If_true -> TruthinessAndLength.py_truth v st
+          | If_false ->
+              let** t, st = TruthinessAndLength.py_truth v st in
+              Result.ok (S_val.not t, st)
+          | If_none ->
+              Result.ok (S_val.SOthers.is_none_ v |> S_val.SBool.of_bool, st)
+          | If_not_none ->
+              Result.ok
+                (S_val.SOthers.is_none_ v |> not |> S_val.SBool.of_bool, st)
+        in
+        if%sat (S_val.to_bool_ b) then Result.ok (Goto (f, target), st)
+        else Result.ok (Next f, st)
+    | _ ->
+        failwith
+          ("ToDo in Interp.FrameExecution.exec_instr for "
+          ^ Py_value.strinf_of_intr ins)
 
   let rec run_frame st (f : frame) :
       (frame_outcome * state, 'err, 'a) Symex.Result.t =
@@ -492,10 +854,33 @@ end = struct
     | Next f', st -> run_frame st (advance f')
     | Goto (f', t), st -> run_frame st { f' with idx = t }
     | Fin out, st -> Result.ok (out, st)
+
+  and call_builtin st name (args : value list) (kwargs : (string * value) list)
+      : (value * state, 'err, 'a) Symex.Result.t =
+    (* let kw k = List.assoc_opt k kwargs in let arity_error () = raise_py st
+       "TypeError" (name ^ "(): wrong number of arguments") in *)
+    match (name, args) with
+    | "Soteria_randint", [] ->
+        let* v = S_numeric.fresh_int () in
+        Result.ok (v, st)
+    | "object.__new__", cls :: _ -> (
+        (* create a fresh, empty instance of the given class; extra args are
+           ignored (as CPython does when __init__ is overridden) *)
+        match deref st cls with
+        | Some (Class _) ->
+            let d, st = alloc st (Dict []) in
+            alloc st (Instance { cls = addr cls; dict = addr d; native = S_val.SOthers.none_ }) |> Result.ok
+        | _ -> raise_py st "TypeError" "object.__new__(X): X is not a type object")
+    | _ -> failwith ("ToDo Interp.FrameExecution.call_builtin for: " ^ name)
 end
 (* ---------- builtin type constructors ------------------------------- *)
 
-(* TODO *)
+and BuiltinTypeConstructors : sig
+val builtin_class_call : string -> value list -> (string * value) list -> state -> (value * state, err, 'a) Result.t
+end = struct
+  let rec builtin_class_call tag args kwargs st =
+    failwith ("ToDo Interp.BuiltinTypeConstructors.builtin_class_call fot the tag: "^tag)
+end
 
 (* ------------------------------------------------------------------ *)
 (* Entry point                                                         *)
@@ -533,10 +918,7 @@ let run_module (code : Phir.code) =
 
 let pp_results ft
     (v :
-      (( value * state,
-         'a,
-         'b )
-       Soteria.Soteria_std.Compo_res.t
+      ((value * state, string, 'b) Soteria.Soteria_std.Compo_res.t
       * S_numeric.syn list)
       list) =
   let ( @@ ) = Stdlib.( @@ ) in
@@ -545,12 +927,12 @@ let pp_results ft
     @@ Fmt.pair
          (Soteria.Soteria_std.Compo_res.pp
             ~ok:(Fmt.pair S_val.ppa Fmt.nop)
-            ~err:Fmt.nop ~miss:Fmt.nop)
+            ~err:Fmt.string ~miss:Fmt.nop)
          (Fmt.list S_numeric.pp_syn)
   in
   pp ft v
 
 let run (code : Phir.code) =
-  Fmt.pr "@[Test@ @]@?";
+  (* Fmt.pr "@[Test@ @]@?"; *)
   let results = Symex.run ~mode:OX (run_module code) in
   Fmt.pr "@[<v 2>Program executed with result:@ %a@]@?" pp_results results

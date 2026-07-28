@@ -7,8 +7,6 @@ module Excl_val = Soteria.Sym_states.Excl.Make (Symex) (S_val)
 module Freeable_excl = Soteria.Sym_states.Freeable.Make (Symex) (Excl_val)
 include Soteria.Sym_states.Pmap.Make (Symex) (S_int) (Freeable_excl)
 
-
-
 let empty : t option = None
 let load addr = wrap addr (Freeable_excl.wrap (Excl_val.load ()))
 let store addr value = wrap addr (Freeable_excl.wrap (Excl_val.store value))

@@ -29,7 +29,8 @@ module S_numeric = struct
 
   let simplify = Symex.simplify
   let distinct vs = Typed.SBool.distinct_seq vs
-  let fresh () = Symex.nondet Typed.t_int
+  let fresh_int () = Symex.nondet Typed.t_int
+  let fresh_float () = Symex.nondet Typed.t_float
   let pp = Typed.ppa
   let show x = (Fmt.to_to_string pp) x
   let pp_syn = Symex.Value.Expr.pp
@@ -53,8 +54,7 @@ module S_val = struct
   let learn_eq (s : syn) (t : t) = Symex.Consumer.learn_eq s t
   let exprs_syn (x : syn) = [ x ]
   let sem_eq = sem_eq_untyped
-
-  let are_addable (x:t) (y:t) : (t*t) option= Typed.are_addable x y
+  let are_addable (x : t) (y : t) : (t * t) option = Typed.are_addable x y
 
   let fresh () : t Symex.t =
     Symex.branches
