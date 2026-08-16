@@ -1,0 +1,7 @@
+(library
+ (name soteria_lambdaml_semantic)
+ (libraries soteria_lambdaml_lang soteria)
+ (flags
+  (:standard -open Soteria.Soteria_std))
+ (preprocess
+  (pps ppx_deriving.std soteria.ppx)))

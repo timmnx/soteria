@@ -1,0 +1,9 @@
+(library
+ (name soteria_lambdaml_parser)
+ (libraries soteria_lambdaml_lang))
+
+(menhir
+ (modules parser))
+
+(ocamllex
+ (modules lexer))

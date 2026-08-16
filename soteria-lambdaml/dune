@@ -1,0 +1,3 @@
+(library
+ (name soteria_lambdaml_lib)
+ (libraries soteria_lambdaml_lang soteria_lambdaml_parser soteria_lambdaml_semantic))

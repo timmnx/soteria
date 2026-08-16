@@ -9,13 +9,12 @@ open Boot
 open Py_value
 module Phir = Pytecode.Phir
 module Ast = Pytecode.Ast
+open Soteria.Logs.Import
 
 type err = string
 
 let raise_py _ a b = Result.error (a ^ b)
-
 let raise_exc (e : value) = Result.error (S_val.show e)
-
 
 type frame_outcome = Returned of value | Yielded of value * frame
 
@@ -30,6 +29,19 @@ let pop f =
   | [] -> invalid_arg "pop: empty operand stack"
 
 let advance f = { f with idx = f.idx + 1 }
+
+(* the underlying payload of a built-in-subclass instance, if any *)
+let native_of st v : value option =
+  match deref st v with
+  | Some (Instance { native; _ }) when not (S_val.SOthers.is_none_ native) -> Some native
+  | _ -> None
+
+let rec map_m st (f: 'a -> state -> ('b * state, 'err, 'c) Result.t) = function
+  | [] -> Result.ok ([], st)
+  | x :: xs ->
+      let** y, st = f x st in
+      let** ys, st = map_m st f xs in
+      Result.ok (y :: ys, st)
 
 (* ------------------------------------------------------------------ *)
 (* The interpreter proper: one big recursive knot                      *)
@@ -70,16 +82,8 @@ end = struct
     | Some (Bytearray _) ->
         raise_py st "TypeError" "unhashable type: 'bytearray'"
     | Some (Instance { cls; _ }) ->
-        (* ref: 3.3.1 __hash__ — a class that overrides __eq__ without defining
-           __hash__ (or sets __hash__ = None) has unhashable instances *)
         raise_py st "TypeError"
           "unhashable type: ToDo in Interp.Dictionnaries.check_hashable"
-        (* let unhashable st = (* (Printf.sprintf "unhashable type: '%s'"
-           (type_name st key)) *) in let** h, st =
-           ClassesAndAttributes.type_lookup st cls "__hash__" in match h with |
-           Some None_ -> unhashable st | Some _ -> Ok ((), st) | None -> ( let*
-           eq, st = type_lookup st cls "__eq__" in match eq with Some _ ->
-           unhashable st | None -> Ok ((), st)) *)
     | _ -> Result.ok ((), st)
 
   let dict_set st a key v : (unit * state, err, 'a) Result.t =
@@ -137,25 +141,6 @@ end = struct
     let** a, st = cmp_unwrap st a eq_dunders in
     let** b, st = cmp_unwrap st b eq_dunders in
     Result.ok (a ==@ b, st)
-  (* match S_val.SBool.to_bool (a ==@ b) with | Some b -> Result.ok (b, st) |
-     None -> Result.error "Not a boolean (in Interp.Equality.py_eq)" *)
-  (* match (a, b) with | _ when is_number a && is_number b -> Result.ok (num_eq
-     a b, st) | _ when (is_complex a && is_numeric b) || (is_numeric a &&
-     is_complex b) -> let ar, ai = Option.get (as_complex a) and br, bi =
-     Option.get (as_complex b) in Result.ok (ar = br && ai = bi, st) (* | Str x,
-     Str y -> Result.ok (x = y, st) *) | _, _ when as_bytes st a <> None &&
-     as_bytes st b <> None -> (* ref: 3.2.5 — bytes and bytearray compare across
-     their types *) Result.ok (as_bytes st a = as_bytes st b, st) (* | None_,
-     None_ -> Result.ok (true, st) *) (* | Tuple xs, Tuple ys -> seq_eq st xs ys
-     *) (* | Ref x, Ref y when x = y -> Result.ok (true, st) *) (* | Ref x, Ref
-     y -> ( match (heap_get st x, heap_get st y) with | List xs, List ys ->
-     seq_eq st xs ys | Dict xs, Dict ys -> dict_eq st xs ys | (Set xs |
-     Frozenset xs), (Set ys | Frozenset ys) -> set_eq st xs ys | Instance _, _ |
-     _, Instance _ -> instance_eq st a b | _ -> Result.ok (false, st)) | (Ref _,
-     _ | _, Ref _) when is_instance_value st a || is_instance_value st b ->
-     instance_eq st a b *) (* singletons and other immediates compare by
-     identity: None/Ellipsis/ NotImplemented/builtins are equal only to
-     themselves *) | _ -> Result.ok (a = b, st) *)
 end
 (* ---------- ordering ----------------------------------------------- *)
 
@@ -177,17 +162,8 @@ end = struct
     match op with
     | Eq -> Equality.py_eq st a b
     | Ne ->
-        (* ref: 3.3.1 — x != y calls x.__ne__(y) (then the reflected
-           y.__ne__(x)); the default object.__ne__ delegates to __eq__ and
-           inverts it. *)
         if is_instance_value st a || is_instance_value st b then
           failwith "ToDo: Interp.Ordering.py_compare (if branch)"
-          (* let* prio = reflected_priority a b "__ne__" in let first, second =
-             if prio then (b, a) else (a, b) in let* r = try_richcmp first
-             "__ne__" [ second ] in match r with | Some v -> py_truth v | None
-             -> ( let* r = try_richcmp second "__ne__" [ first ] in match r with
-             | Some v -> py_truth v | None -> let* e = py_eq a b in return (not
-             e)) *)
         else
           let** e, st = Equality.py_eq st a b in
           Result.ok (S_val.not e, st)
@@ -207,11 +183,6 @@ end = struct
     let** b, st = Equality.cmp_unwrap st b dunders in
     if is_instance_value st a || is_instance_value st b then
       failwith "ToDo: Interp.Ordering.py_compare_value (if branch)"
-      (* match op with | Eq -> instance_eq_value a b | Ne -> instance_ne_value a
-         b | Lt -> instance_order_value a b "__lt__" "__gt__" "<" | Gt ->
-         instance_order_value a b "__gt__" "__lt__" ">" | Le ->
-         instance_order_value a b "__le__" "__ge__" "<=" | Ge ->
-         instance_order_value a b "__ge__" "__le__" ">=" *)
     else py_compare op a b st
 end
 
@@ -225,7 +196,35 @@ end
 
 (* ---------- repr and str ------------------------------------------- *)
 
-(* TODO *)
+and ReprAndStr : sig
+  val py_str : value -> state -> (string * state, err, 'a) Result.t
+end = struct
+
+  let py_repr (v : value) st : (string * state, err, 'a) Result.t =
+    failwith "Interp.ReprAndStr.py_repr ToDo"
+
+  let rec py_str (v : value) st : (string * state, err, 'a) Result.t =
+    match v with
+    | _ when S_val.SStr.is_str v -> Result.ok (S_val.SStr.get_str v |> Option.get, st)
+    | _ when S_val.SOthers.is_ref v -> (
+      let a = S_val.SOthers.get_ref v |> Option.get in
+        match heap_get st a with
+        | Instance _ -> (
+          let** m, st = ClassesAndAttributes.find_dunder v "__str__" st in
+            match m with
+            | Some f -> (
+                let** r, st = Call.call st f [] [] in
+                match r with
+                | _ when S_val.SStr.is_str r -> Result.ok (S_val.SStr.get_str r |> Option.get, st)
+                | _ ->
+                    raise_py st "TypeError"
+                      (Printf.sprintf "__str__ returned non-string (type %s)"
+                         "(type_name st r)"))
+            | None -> (
+                match native_of st v with Some p -> py_str p st | None -> py_repr v st))
+        | _ -> py_repr v st)
+    | _ -> py_repr v st
+end
 
 (* ---------- iteration ---------------------------------------------- *)
 
@@ -239,13 +238,23 @@ and ClassesAndAttributes : sig
   val getattr_value :
     state -> value -> string -> (value * state, err, 'a) Result.t
 
-  val bind_class_value : value -> inst:value -> cls_addr:int -> state -> (value * state, err, 'a) Result.t
+  val bind_class_value :
+    value ->
+    inst:value ->
+    cls_addr:int ->
+    state ->
+    (value * state, err, 'a) Result.t
+
+  val find_dunder : value -> err -> state -> (value option * state, err, 'a) Result.t
+
 end = struct
   let type_lookup st cls_addr name =
     let rec go st = function
       | [] -> Result.ok (None, st)
       | c :: rest -> (
-          let** f, st = Dictionaries.dget st (cls_of st c).cdict (S_val.SStr.str name) in
+          let** f, st =
+            Dictionaries.dget st (cls_of st c).cdict (S_val.SStr.str name)
+          in
           match f with Some v -> Result.ok (Some v, st) | None -> go st rest)
     in
     go st (cls_of st cls_addr).mro
@@ -320,48 +329,93 @@ end = struct
      (self, st) | "__func__" -> Ok (func, st) | _ -> getattr_value st func name)
      | _ -> attribute_error st v name *)
 
-     let bind_class_value found ~inst ~cls_addr st =
-       match deref st found with
-       | Some (Func _) -> failwith "ToDo Interp.ClassesAndAttributes.bind_class_value -> Some (Func _)"
-       | Some (Classmethod m) -> failwith "ToDo Interp.ClassesAndAttributes.bind_class_value -> Some (Classmethod m)"
-       | Some (Staticmethod m) -> Result.ok (m, st)
-       | _ -> (
-           match found with
-           | _ when S_val.SOthers.is_builtin found -> failwith "ToDo Interp.ClassesAndAttributes.bind_class_value -> _"
-           | _ -> Result.ok (found, st))
+  let bind_class_value found ~inst ~cls_addr st =
+    match deref st found with
+    | Some (Func _) ->
+        failwith
+          "ToDo Interp.ClassesAndAttributes.bind_class_value -> Some (Func _)"
+    | Some (Classmethod m) ->
+        failwith
+          "ToDo Interp.ClassesAndAttributes.bind_class_value -> Some \
+           (Classmethod m)"
+    | Some (Staticmethod m) -> Result.ok (m, st)
+    | _ -> (
+        match found with
+        | _ when S_val.SOthers.is_builtin found ->
+            Result.ok (S_val.SOthers.mk_bound (found, inst), st)
+        | _ -> Result.ok (found, st))
+
+  let find_dunder (v: value) name st : (value option * state, err, 'a) Result.t =
+    match deref st v with
+    | Some (Instance { cls; _ }) -> (
+        let** found, st = type_lookup st cls name in
+        match found with
+        | Some f ->
+            let** b, st = bind_class_value f ~inst:v ~cls_addr:cls st in
+            Result.ok (Some b, st)
+        | None -> Result.ok (None, st))
+    | _ -> Result.ok (None, st)
 end
 
 (* ---------- isinstance / issubclass -------------------------------- *)
-
 and IsinstanceIssubclass : sig
-  val isinstance_value : value -> value -> state -> (bool * state, err, 'a) Result.t
+  val isinstance_value :
+    value -> value -> state -> (bool * state, err, 'a) Result.t
 end = struct
   let rec isinstance_value (v : value) (cls_v : value) st =
-    failwith "ToDo Interp.IsinstanceIssubclass.isinstance_value"
+    match cls_v with
+    | _ when S_val.SOthers.is_ref cls_v -> (
+        let ca = S_val.SOthers.get_ref cls_v |> Option.get in
+        match heap_get st ca with
+        | Union_type _ ->
+            failwith
+              "ToDo Interp.IsinstanceIssubclass.isinstance_value case ref -> \
+               Union_type"
+        | Class { builtin = Some _; _ } -> Result.ok (true, st)
+        | Class _ -> (
+            match deref st v with
+            | Some (Instance { cls; _ }) ->
+                Result.ok (List.mem ca (cls_of st cls).mro, st)
+            | Some (Class _) ->
+                let** ma, st = ClassCreation.metaclass_addr (addr v) st in
+                Result.ok (List.mem ca (cls_of st ma).mro, st)
+            | _ -> Result.ok (false, st))
+        | _ ->
+            failwith
+              "ToDo Interp.IsinstanceIssubclass.isinstance_value case ref")
+    | _ -> failwith "ToDo Interp.IsinstanceIssubclass.isinstance_value"
 end
 
 (* ---------- class creation ----------------------------------------- *)
-
 and ClassCreation : sig
-  val instantiate : int -> value list -> (string * value) list -> state -> (value * state, err, 'a) Result.t
+  val instantiate :
+    int ->
+    value list ->
+    (string * value) list ->
+    state ->
+    (value * state, err, 'a) Result.t
+
+  val metaclass_addr : int -> state -> (int * state, 'err, 'a) Result.t
 end = struct
   let builtin_base_tag cls_addr st =
     Result.ok
-      (List.find_map
-         (fun a ->
-           match (cls_of st a).builtin with Some "object" -> None | t -> t)
-         (cls_of st cls_addr).mro, st)
+      ( List.find_map
+          (fun a ->
+            match (cls_of st a).builtin with Some "object" -> None | t -> t)
+          (cls_of st cls_addr).mro,
+        st )
+
   let is_native_tag = function
     | "dict" | "list" | "set" | "frozenset" | "int" | "float" | "str" | "tuple"
     | "bytes" ->
         true
     | _ -> false
 
-
   let instantiate_plain cls_addr args kwargs st =
-    (* ref: 3.3.1 __new__ / __init__ — __new__ creates the instance (implicitly a
-       staticmethod, receiving the class); __init__ then initialises it, but only
-       when __new__ returned an instance of cls, and __init__ must return None. *)
+    (* ref: 3.3.1 __new__ / __init__ — __new__ creates the instance (implicitly
+       a staticmethod, receiving the class); __init__ then initialises it, but
+       only when __new__ returned an instance of cls, and __init__ must return
+       None. *)
     let** new_m, st = ClassesAndAttributes.type_lookup st cls_addr "__new__" in
     let** inst, st =
       match new_m with
@@ -370,16 +424,26 @@ end = struct
           Call.call st f (S_val.SOthers.mk_ref cls_addr :: args) kwargs
       | None ->
           let d, st = alloc st (Dict []) in
-          alloc st (Instance { cls = cls_addr; dict = addr d; native = S_val.SOthers.none_ })
+          alloc st
+            (Instance
+               { cls = cls_addr; dict = addr d; native = S_val.SOthers.none_ })
           |> Result.ok
     in
-    let** is_inst, st = IsinstanceIssubclass.isinstance_value inst (S_val.SOthers.mk_ref cls_addr) st in
+    let** is_inst, st =
+      IsinstanceIssubclass.isinstance_value inst
+        (S_val.SOthers.mk_ref cls_addr)
+        st
+    in
     if not is_inst then Result.ok (inst, st)
     else
-      let** init, st = ClassesAndAttributes.type_lookup st cls_addr "__init__" in
+      let** init, st =
+        ClassesAndAttributes.type_lookup st cls_addr "__init__"
+      in
       match init with
       | Some f -> (
-          let** bound, st = ClassesAndAttributes.bind_class_value f ~inst ~cls_addr st in
+          let** bound, st =
+            ClassesAndAttributes.bind_class_value f ~inst ~cls_addr st
+          in
           let** rv, st = Call.call st bound args kwargs in
           match rv with
           | _ when S_val.SOthers.is_none_ rv -> Result.ok (inst, st)
@@ -393,7 +457,9 @@ end = struct
     let** tag_opt, st = builtin_base_tag cls_addr st in
     match tag_opt with
     | Some tag when is_native_tag tag -> (
-        let** init, st = ClassesAndAttributes.type_lookup st cls_addr "__init__" in
+        let** init, st =
+          ClassesAndAttributes.type_lookup st cls_addr "__init__"
+        in
         let user_init =
           match Option.map (deref st) init with
           | Some (Some (Func _)) -> init
@@ -409,11 +475,14 @@ end = struct
         in
         let d, st = alloc st (Dict []) in
         let inst, st =
-          alloc st (Instance { cls = cls_addr; dict = addr d; native = payload })
+          alloc st
+            (Instance { cls = cls_addr; dict = addr d; native = payload })
         in
         match user_init with
         | Some f -> (
-            let** bound, st = ClassesAndAttributes.bind_class_value f ~inst ~cls_addr st in
+            let** bound, st =
+              ClassesAndAttributes.bind_class_value f ~inst ~cls_addr st
+            in
             let** rv, st = Call.call st bound args kwargs in
             match rv with
             | _ when S_val.SOthers.is_none_ rv -> Result.ok (inst, st)
@@ -423,6 +492,11 @@ end = struct
                      "(type_name st rv)"))
         | None -> Result.ok (inst, st))
     | _ -> instantiate_plain cls_addr args kwargs st
+
+  let metaclass_addr cls_addr st =
+    match (cls_of st cls_addr).meta with
+    | Some m -> Result.ok (m, st)
+    | None -> Result.ok (builtin_class_addr st "type", st)
 end
 
 (* ---------- generators --------------------------------------------- *)
@@ -454,9 +528,8 @@ end = struct
      Result.ok (v1', v2') | None -> Result.error "Type error in add" *)
 
   let cast_to_bool v = S_val.to_bool_ v |> Result.ok
-    (* match S_val.cast_checked v S_val.t_bool with
-    | Some v -> Result.ok v
-    | None -> Result.error "Type error here" *)
+  (* match S_val.cast_checked v S_val.t_bool with | Some v -> Result.ok v | None
+     -> Result.error "Type error here" *)
 
   let binary (op : Phir.binop) ~inplace (a : value) (b : value) st :
       (S_val.t * state, err, 'a) Result.t =
@@ -680,32 +753,24 @@ end = struct
   let rec call st (callee : value) (args : value list) kwargs :
       (value * state, 'err, 'a) Result.t =
     match callee with
-    | _ when None <> S_val.SOthers.get_builtin callee ->
+    | _ when S_val.SOthers.is_builtin callee ->
         let name = S_val.SOthers.get_builtin callee |> Option.get in
         FrameExecution.call_builtin st name args kwargs
-    | _ when S_val.SOthers.is_ref callee ->
-      let a = S_val.SOthers.get_ref callee |> Option.get in(
-          match heap_get st a with
-          | Func _ -> failwith "ToDo Interp.Call.call -> case Ref -> case Func"
-          | Class { builtin = Some tag; _ } -> failwith "ToDo Interp.Call.call -> case Ref -> case Class {tag}"
-          | Class { meta = Some meta; _ } -> failwith "ToDo Interp.Call.call -> case Ref -> case Class {meta}"
-          | Class _ -> ClassCreation.instantiate a args kwargs st
-          | Instance _ -> failwith "ToDo Interp.Call.call -> case Ref -> case Instance"
-          | _ -> failwith "ToDo Interp.Call.call -> case Ref -> not callable")
-
-    (* | Bound (g, self) -> call st g (self :: args) kwargs | Ref a -> ( match
-       heap_get st a with | Func fn -> call_func st fn args kwargs | Class {
-       builtin = Some tag; _ } -> builtin_class_call st tag args kwargs (* ref:
-       3.3.3 — calling a class invokes its metaclass's __call__; the default
-       (type.__call__) instantiates. A user metaclass __call__ overrides
-       instantiation. *) | Class { meta = Some meta; _ } -> ( let* mcall, st =
-       type_lookup st meta "__call__" in match mcall with | Some (Builtin
-       "type.__call__") | None -> instantiate st a args kwargs | Some f -> call
-       st (bind_class_value st f ~inst:(Ref a) ~cls_addr:meta) args kwargs) |
-       Class _ -> instantiate st a args kwargs | Instance _ -> ( let* m, st =
-       find_dunder st callee "__call__" in match m with | Some f -> call st f
-       args kwargs | None -> not_callable st callee) | _ -> not_callable st
-       callee) *)
+    | _ when S_val.SOthers.is_ref callee -> (
+        let a = S_val.SOthers.get_ref callee |> Option.get in
+        match heap_get st a with
+        | Func _ -> failwith "ToDo Interp.Call.call -> case Ref -> case Func"
+        | Class { builtin = Some tag; _ } ->
+            failwith "ToDo Interp.Call.call -> case Ref -> case Class {tag}"
+        | Class { meta = Some meta; _ } ->
+            failwith "ToDo Interp.Call.call -> case Ref -> case Class {meta}"
+        | Class _ -> ClassCreation.instantiate a args kwargs st
+        | Instance _ ->
+            failwith "ToDo Interp.Call.call -> case Ref -> case Instance"
+        | _ -> failwith "ToDo Interp.Call.call -> case Ref -> not callable")
+    | _ when S_val.SOthers.is_bound callee ->
+        let g, self = S_val.SOthers.get_bound callee |> Option.get in
+        call st g (self :: args) kwargs
     | _ -> failwith "ToDo in Interp.Call.call"
 end
 
@@ -729,16 +794,21 @@ end = struct
     | Some (Instance _) -> Result.ok (v, st)
     | _ -> raise_py st "TypeError" "exceptions must derive from BaseException"
 
-  let set_exc_chain excv ~cause ~suppress st : (unit * state, 'a, 'b) Result.t =
-    failwith "ToDo Interp.FrameExecution.set_exc_chain"
-    (* let ctx = if st.cur_exc = excv then None_ else st.cur_exc in
-    let* () = set_exc_attr excv "__context__" ctx in
-    let* () = set_exc_attr excv "__cause__" cause in
-    set_exc_attr excv "__suppress_context__" (Bool suppress) *)
 
+  let set_exc_attr exc name v st : (unit * state, 'err, 'a) Result.t =
+    match deref st exc with
+    | Some (Instance { dict; _ }) -> Dictionaries.dict_set st dict (S_val.SStr.str name) v
+    | _ -> Result.ok ((), st)
+
+  let set_exc_chain excv ~cause ~suppress st : (unit * state, 'a, 'b) Result.t =
+    let ctx = if st.cur_exc = excv then S_val.SOthers.none_ else st.cur_exc in
+    let** (), st = set_exc_attr excv "__context__" ctx st in
+    let** (), st = set_exc_attr excv "__cause__" cause st in
+    set_exc_attr excv "__suppress_context__" (S_val.SBool.of_bool suppress) st
 
   let exec_instr st (f : frame) (ins : Phir.instr) :
       (istep * state, err, 'a) Result.t =
+    [%l.debug "exec_instr on {%a}" (Phir.pp_instr [||]) ins];
     let op1 st f v =
       let** (vals, f), st = OperandEvaluation.eval_operands st f [ v ] in
       Result.ok ((List.hd vals, f), st)
@@ -776,8 +846,16 @@ end = struct
         let** (v, f), st = op1 st f v in
         Result.ok (Next (push f v), st)
     | Unary (op, v) ->
+        let op_str =
+          match op with
+          | Negative -> "neg"
+          | Not -> "not"
+          | Invert -> "invert"
+          | To_bool -> "to_bool"
+        in
         let** (v, f), st = op1 st f v in
         let** r, st = Operators.unary op v st in
+        [%l.debug "Unary (%s, %a): %a" op_str Aux.S_val.pp v Aux.S_val.pp r];
         Result.ok (Next (push f r), st)
     | Binary_op { op; inplace; l; r } -> (
         let** (vals, f), st = OperandEvaluation.eval_operands st f [ l; r ] in
@@ -800,10 +878,15 @@ end = struct
             Result.ok (Next (push f v), st)
         | _ -> assert false)
     | Load_assertion_error ->
-        Result.ok (Next (push f (S_val.SOthers.mk_ref (builtin_class_addr st "AssertionError"))), st)
+        Result.ok
+          ( Next
+              (push f
+                 (S_val.SOthers.mk_ref (builtin_class_addr st "AssertionError"))),
+            st )
     | Raise { exc; cause } -> (
         let** (vals, f), st =
-          OperandEvaluation.eval_operands st f (Option.to_list exc @ Option.to_list cause)
+          OperandEvaluation.eval_operands st f
+            (Option.to_list exc @ Option.to_list cause)
         in
         ignore f;
         match (exc, vals) with
@@ -812,35 +895,41 @@ end = struct
               raise_py st "RuntimeError" "No active exception to reraise"
             else raise_exc st.cur_exc
         | Some _, [ v ] ->
-            (* ref: 7.8 — implicit chaining: the active exception (if any) becomes
-               the new exception's __context__ *)
             let** excv, st = exception_instance v st in
-            let** (), st = set_exc_chain excv ~cause:S_val.SOthers.none_ ~suppress:false st in
+            let** (), st =
+              set_exc_chain excv ~cause:S_val.SOthers.none_ ~suppress:false st
+            in
             raise_exc excv
         | Some _, [ v; c ] ->
-            (* ref: 7.8 — `from` sets __cause__ (None is allowed) and suppresses
-               the context display *)
             let** excv, st = exception_instance v st in
-            let** cv, st = if S_val.SOthers.is_none_ c then Result.ok (S_val.SOthers.none_, st) else exception_instance c st in
+            let** cv, st =
+              if S_val.SOthers.is_none_ c then
+                Result.ok (S_val.SOthers.none_, st)
+              else exception_instance c st
+            in
             let** (), st = set_exc_chain excv ~cause:cv ~suppress:true st in
             raise_exc excv
         | _ -> assert false)
     | Jump t -> Result.ok (Goto (f, t), st)
     | Cond_jump { cond; v; target } ->
         let** (v, f), st = op1 st f v in
-        let** b, st =
+        let b =
           match cond with
-          | If_true -> TruthinessAndLength.py_truth v st
-          | If_false ->
-              let** t, st = TruthinessAndLength.py_truth v st in
-              Result.ok (S_val.not t, st)
-          | If_none ->
-              Result.ok (S_val.SOthers.is_none_ v |> S_val.SBool.of_bool, st)
-          | If_not_none ->
-              Result.ok
-                (S_val.SOthers.is_none_ v |> not |> S_val.SBool.of_bool, st)
+          | If_true -> S_val.to_bool_ v
+          | If_false -> S_val.not v
+          | If_none -> v ==@ S_val.SOthers.none_
+          | If_not_none -> v ==@ S_val.SOthers.none_ |> S_val.not
+          (* | If_true -> [%l.debug "Cond_jump(If_true)"];
+             TruthinessAndLength.py_truth v st | If_false -> [%l.debug
+             "Cond_jump(If_false)"]; TruthinessAndLength.py_truth (S_val.not v)
+             st (* let** t, st = TruthinessAndLength.py_truth v st in Result.ok
+             (S_val.not t, st)) *) | If_none -> [%l.debug "Cond_jump(If_none)"];
+             Result.ok (S_val.SOthers.is_none_ v |> S_val.SBool.of_bool, st) |
+             If_not_none -> [%l.debug "Cond_jump(If_not_none)"]; Result.ok
+             (S_val.SOthers.is_none_ v |> not |> S_val.SBool.of_bool, st) *)
         in
-        if%sat (S_val.to_bool_ b) then Result.ok (Goto (f, target), st)
+        [%l.debug "Evaluated guard %a -> %a" Aux.S_val.pp v Aux.S_val.pp b];
+        if%sat b then Result.ok (Goto (f, target), st)
         else Result.ok (Next f, st)
     | _ ->
         failwith
@@ -854,7 +943,6 @@ end = struct
     | Next f', st -> run_frame st (advance f')
     | Goto (f', t), st -> run_frame st { f' with idx = t }
     | Fin out, st -> Result.ok (out, st)
-
   and call_builtin st name (args : value list) (kwargs : (string * value) list)
       : (value * state, 'err, 'a) Symex.Result.t =
     (* let kw k = List.assoc_opt k kwargs in let arity_error () = raise_py st
@@ -869,17 +957,34 @@ end = struct
         match deref st cls with
         | Some (Class _) ->
             let d, st = alloc st (Dict []) in
-            alloc st (Instance { cls = addr cls; dict = addr d; native = S_val.SOthers.none_ }) |> Result.ok
-        | _ -> raise_py st "TypeError" "object.__new__(X): X is not a type object")
+            alloc st
+              (Instance
+                 { cls = addr cls; dict = addr d; native = S_val.SOthers.none_ })
+            |> Result.ok
+        | _ ->
+            raise_py st "TypeError" "object.__new__(X): X is not a type object")
+    | "BaseException.__init__", self :: rest ->
+        let** (), st = set_exc_attr self "args" (S_val.SOthers.mk_tuple rest) st in
+        Result.ok (S_val.SOthers.none_, st)
+    | "print", _ ->
+      let** _, st = map_m st ReprAndStr.py_str args in
+      Result.ok (S_val.SOthers.none_, st)
     | _ -> failwith ("ToDo Interp.FrameExecution.call_builtin for: " ^ name)
 end
 (* ---------- builtin type constructors ------------------------------- *)
 
 and BuiltinTypeConstructors : sig
-val builtin_class_call : string -> value list -> (string * value) list -> state -> (value * state, err, 'a) Result.t
+  val builtin_class_call :
+    string ->
+    value list ->
+    (string * value) list ->
+    state ->
+    (value * state, err, 'a) Result.t
 end = struct
   let rec builtin_class_call tag args kwargs st =
-    failwith ("ToDo Interp.BuiltinTypeConstructors.builtin_class_call fot the tag: "^tag)
+    failwith
+      ("ToDo Interp.BuiltinTypeConstructors.builtin_class_call fot the tag: "
+     ^ tag)
 end
 
 (* ------------------------------------------------------------------ *)
@@ -908,13 +1013,6 @@ let run_module (code : Phir.code) =
   match process with
   | Returned v, st -> Result.ok (v, st)
   | _ -> failwith "ToDo (in run_module)"
-(* let go () = match run_frame st frame with | Ok (Returned _, st) -> Ok
-   (collected_output st) | Ok (Yielded _, _) -> Error "module-level yield?" |
-   Error (exc, st) -> let msg = match py_str st exc with Ok (s, _) -> s | Error
-   _ -> "<unprintable>" in Error (Printf.sprintf "Uncaught %s: %s" (type_name st
-   exc) msg) in match handle go with | result -> result | exception
-   Stack_overflow -> Error "OCaml stack overflow" | exception e -> Error
-   ("interpreter bug: " ^ Printexc.to_string e) *)
 
 let pp_results ft
     (v :
@@ -926,11 +1024,19 @@ let pp_results ft
     Fmt.list
     @@ Fmt.pair
          (Soteria.Soteria_std.Compo_res.pp
-            ~ok:(Fmt.pair S_val.ppa Fmt.nop)
+            ~ok:(Fmt.pair ~sep:Fmt.nop S_val.ppa Fmt.nop)
             ~err:Fmt.string ~miss:Fmt.nop)
-         (Fmt.list S_numeric.pp_syn)
+         (* (Fmt.list S_numeric.pp_syn) *)
+         (fun fmt x ->
+           Format.fprintf fmt "  @[<v>%a@]" (Fmt.list S_numeric.pp_syn) x)
   in
   pp ft v
+
+let () =
+  Soteria.Logs.Config.set_and_lock
+    (* (Soteria.Logs.Config.make ~level:(Some Debug) ~kind:Html ~no_color:true
+       ()) *)
+    (Soteria.Logs.Config.make ~level:(Some Debug) ~kind:Stderr ~no_color:true ())
 
 let run (code : Phir.code) =
   (* Fmt.pr "@[Test@ @]@?"; *)

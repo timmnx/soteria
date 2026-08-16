@@ -1,0 +1,4 @@
+(executable
+ (name soteria_lambdaml)
+ (libraries soteria_lambdaml_lib soteria cmdliner)
+ (flags :standard -open Soteria_lambdaml_lib))

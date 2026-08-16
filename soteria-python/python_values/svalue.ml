@@ -671,6 +671,8 @@ module SStr = struct
   let str s = Str s <| TStr
   (* let is_static_str (v : t) : bool =
     match v.node.kind with Str _ -> true | _ -> false *)
+  let is_str (v : t) : bool =
+    match v.node.ty with TStr -> true | _ -> false
   let get_str (v : t) : string option =
     match v.node.kind with Str s -> Some s | _ -> None
   (* ToDo *)
@@ -710,6 +712,13 @@ module SOthers = struct
   let get_bound (v : t) : (t * t) option =
     match v.node.kind with Bound (a,b) -> Some (a,b) | _ -> None
 
+  (* Tuple *)
+  let mk_tuple l = Tuple l <| TOthers
+  let is_tuple (v : t) : bool =
+    match v.node.kind with Tuple _ -> true | _ -> false
+  let get_tuple (v : t) : t list option =
+    match v.node.kind with Tuple l -> Some l | _ -> None
+
   (* Not_implemented *)
   let not_implemented = Not_implemented <| TOthers
 
@@ -736,7 +745,10 @@ let rec not sv =
     | _ -> Unop (Not, sv) <| TBool
 
 (** {2 Unop functions} *)
-let neg (v : t) : t = failwith "'neg' not implemented yet (ToDo in Svalue.neg)"
+let neg (v : t) : t =
+  match v.node.ty with
+  | _ when SNumeric.is_number v -> SNumeric.neg v
+  | _ -> failwith "'neg' not implemented yet (ToDo in Svalue.neg)"
 
 let not_ (v : t) : t = failwith "'not_' not implemented yet (ToDo in Svalue.not_)"
 
@@ -754,20 +766,26 @@ let to_bool_ (v : t) : t =
   | None_ -> SBool.v_false
   | Bool _ -> v
   | Int _ | Float _ -> SNumeric.to_bool v
-  | Complex _ -> failwith "ToDo Svalue.to_bool_.Complex"
+  (* | Complex _ -> failwith "ToDo Svalue.to_bool_.Complex"
   | Str _ -> failwith "ToDo Svalue.to_bool_.Str"
   | Bytes _ -> failwith "ToDo Svalue.to_bool_.Bytes"
   | Tuple _ -> failwith "ToDo Svalue.to_bool_.Tuple"
   | Range _ -> failwith "ToDo Svalue.to_bool_.Range"
-  | Ref _ -> failwith "ToDo Svalue.to_bool_.Ref"
-  | _ -> SBool.v_true
+  | Ref _ -> failwith "ToDo Svalue.to_bool_.Ref" *)
+  (* | _ -> Unop (To_bool, v) <| TBool *)
+  | _ -> v
 
 (** {2 Binop functions} *)
 let add (v1 : t) (v2 : t) : t =
   match (v1.node.kind, v2.node.kind) with
   | Int i1, Int i2 -> SNumeric.int_z (Z.div i1 i2)
   | _ -> Binop (Add, v1, v2) <| TInt
-let sub (v1 : t) (v2 : t) : t = failwith "Sub not implemented yet (ToDo)"
+let sub (v1 : t) (v2 : t) : t =
+  match v1.node.ty, v2.node.kind with
+  | _ when SNumeric.is_number v1 && SNumeric.is_number v2 ->
+    SNumeric.sub v1 v2
+  | _ ->
+    failwith "Sub not implemented for other than SNumerics (ToDo)"
 
 let mul (v1 : t) (v2 : t) : t = failwith "Mul not implemented yet (ToDo)"
 
@@ -833,8 +851,9 @@ let sem_eq_untyped v1 v2 =
 let sem_ne (v1 : t) (v2 : t) : t =
   if equal v1 v2 then SBool.v_false
   else
-  match (v1.node.ty, v2.node.ty) with
-  | _ -> failwith "Ne not implemented yet (ToDo in Svalue.sem_ne)"
+  not @@ sem_eq v1 v2
+  (* match (v1.node.ty, v2.node.ty) with
+  | _ -> failwith "Ne not implemented yet (ToDo in Svalue.sem_ne)" *)
 
 let lt (v1 : t) (v2 : t) : t =
   if equal v1 v2 then SBool.v_false else

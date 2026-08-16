@@ -153,6 +153,7 @@ module SStr : sig
   val str : string -> [> sstr ] t
 
   (* val is_static_str : [< any] t -> bool *)
+  val is_str : [< any ] t -> bool
   val get_str : [< any ] t -> string option
 end
 
@@ -179,6 +180,11 @@ module SOthers : sig
   val mk_bound : [< any ] t * [< any ] t -> [> sothers ] t
   val is_bound : [< any ] t -> bool
   val get_bound : [< any ] t -> ([> any ] t * [> any ] t) option
+
+  (* Tuple *)
+  val mk_tuple : [< any ] t list -> [> sothers ] t
+  val is_tuple : [< any ] t -> bool
+  val get_tuple : [< any ] t -> [> any ] t list option
 
   (* Not_implemented *)
   val not_implemented : [> sothers ] t
